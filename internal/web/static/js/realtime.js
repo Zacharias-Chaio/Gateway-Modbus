@@ -15,20 +15,21 @@ function channelDevices(ch) {
   }).filter(Boolean);
 }
 
-// rtSelection 返回当前选中的 { channelId, deviceIndex } 或 null。
+// rtSelection 返回当前选中的 { channelIndex, deviceIndex } 或 null。
+// 通道索引从 0 开始（0 是有效值），不能用真值判断是否存在。
 function rtSelection() {
   const ch = document.getElementById('rt-channel');
   const dev = document.getElementById('rt-device');
-  if (!ch || !dev) return null;
-  const channelId = toNum(ch.value, 0);
+  if (!ch || !dev || ch.value === '') return null;
+  const channelIndex = toNum(ch.value, -1);
   const deviceIndex = toNum(dev.value, 0);
-  if (!channelId) return null;
-  return { channelId, deviceIndex };
+  if (channelIndex < 0) return null;
+  return { channelIndex, deviceIndex };
 }
 
 // channelDeviceModel 根据下拉选择查找设备模型。
 function channelDeviceModel() {
-  const ch = state.channels.find(c => String(c.id) === document.getElementById('rt-channel').value);
+  const ch = state.channels.find(c => String(c.channelIndex) === document.getElementById('rt-channel').value);
   if (!ch) return null;
   const devIdx = toNum(document.getElementById('rt-device').value, -1);
   const d = (ch.devices || [])[devIdx];
@@ -52,14 +53,15 @@ function rtStopPolling() {
 }
 
 // renderRealtime 由 switchSection('realtime') 触发：填充下拉、启动轮询。
+// 通道以下拉顺序（通道索引）定位，标签展示自动生成的通道ID（Channel-{索引}）。
 function renderRealtime() {
-  fillSelect(document.getElementById('rt-channel'), state.channels, c => c.id, c => `通道${c.id} · ${c.name}`, true);
+  fillSelect(document.getElementById('rt-channel'), state.channels, c => c.channelIndex, c => `${c.id || channelIdFromIndex(c.channelIndex)} · ${c.name}`, true);
   onRtChannelChange();
   rtStartPolling();
 }
 
 function onRtChannelChange() {
-  const ch = state.channels.find(c => String(c.id) === document.getElementById('rt-channel').value);
+  const ch = state.channels.find(c => String(c.channelIndex) === document.getElementById('rt-channel').value);
   fillSelect(document.getElementById('rt-device'), channelDevices(ch),
     d => d.index, d => `#${d.commNo} · ${d.name || (d.model.profile && d.model.profile.name) || '未命名设备'}`, true);
   rtValues = {};
@@ -75,7 +77,7 @@ async function fetchRtValues() {
   if (!tb || rtLoading) return;
   rtLoading = true;
   try {
-    const data = await apiGet('/realtime?device=' + encodeURIComponent(sel.channelId + '/' + sel.deviceIndex));
+    const data = await apiGet('/realtime?device=' + encodeURIComponent(sel.channelIndex + '/' + sel.deviceIndex));
     rtValues = (data && data.values) || {};
     // 逐属性更新 DOM
     const m = channelDeviceModel();
@@ -163,7 +165,7 @@ async function setRtValue(propId) {
   input.disabled = true;
   try {
     await apiPost('/set', {
-      channelId: sel.channelId,
+      channelIndex: sel.channelIndex,
       deviceIndex: sel.deviceIndex,
       propName: p.name,
       value: numVal

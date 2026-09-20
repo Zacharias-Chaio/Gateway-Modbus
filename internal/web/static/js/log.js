@@ -5,13 +5,14 @@ let logTimer = null;
 let logLoading = false;
 
 function renderLogSelectors() {
-  fillSelect(document.getElementById('log-channel'), state.channels, c => c.id, c => `通道${c.id} · ${c.name}`, true);
+  // 链路下拉按通道索引（从 0 开始）取值，标签展示自动生成的通道ID（Channel-{索引}）。
+  fillSelect(document.getElementById('log-channel'), state.channels, c => c.channelIndex, c => `${c.id || channelIdFromIndex(c.channelIndex)} · ${c.name}`, true);
   onLogChannelChange();
   logStartPolling();
 }
 
 function onLogChannelChange() {
-  const ch = state.channels.find(c => String(c.id) === document.getElementById('log-channel').value);
+  const ch = state.channels.find(c => String(c.channelIndex) === document.getElementById('log-channel').value);
   const devices = [{ index: -1, commNo: '', name: '', model: null }].concat(channelDevices(ch));
   fillSelect(document.getElementById('log-device'), devices,
     d => d.index, d => d.index < 0 ? '全部设备' : `#${d.commNo} · ${d.name || (d.model.profile && d.model.profile.name) || '未命名设备'}`, false);
@@ -41,22 +42,25 @@ function logStopPolling() {
 function logSelection() {
   const channel = document.getElementById('log-channel');
   const device = document.getElementById('log-device');
-  if (!channel || !device || !channel.value) return null;
-  return { channelId: toNum(channel.value, 0), deviceIndex: toNum(device.value, -1) };
+  if (!channel || !device || channel.value === '') return null;
+  // 通道索引从 0 开始（0 是有效值），用 -1 表示无效。
+  const channelIndex = toNum(channel.value, -1);
+  if (channelIndex < 0) return null;
+  return { channelIndex, deviceIndex: toNum(device.value, -1) };
 }
 
 async function fetchCommLog(force) {
   const sel = logSelection();
-  if (!sel || !sel.channelId || logLoading) return;
+  if (!sel || logLoading) return;
   logLoading = true;
-  const selectionKey = sel.channelId + '/' + sel.deviceIndex;
+  const selectionKey = sel.channelIndex + '/' + sel.deviceIndex;
   try {
-    let url = '/comm-monitor?channelId=' + encodeURIComponent(sel.channelId) + '&limit=200';
+    let url = '/comm-monitor?channelIndex=' + encodeURIComponent(sel.channelIndex) + '&limit=200';
     if (sel.deviceIndex >= 0) url += '&deviceIndex=' + encodeURIComponent(sel.deviceIndex);
     if (!force && logNextSeq) url += '&afterSeq=' + encodeURIComponent(logNextSeq);
     const data = await apiGet(url);
     const active = logSelection();
-    if (!active || active.channelId + '/' + active.deviceIndex !== selectionKey) return;
+    if (!active || active.channelIndex + '/' + active.deviceIndex !== selectionKey) return;
     if (force) logEvents = data.events || [];
     else logEvents = logEvents.concat(data.events || []);
     if (logEvents.length > 200) logEvents = logEvents.slice(-200);

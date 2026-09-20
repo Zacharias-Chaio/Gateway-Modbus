@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 )
@@ -8,9 +9,9 @@ import (
 // CommunicationMonitor returns current-session packets and statistics for one
 // device, or for every device on a link when deviceIndex is omitted.
 func (s *Server) CommunicationMonitor(w http.ResponseWriter, r *http.Request) {
-	channelID, err := positiveQueryInt(r, "channelId")
+	channelIndex, err := nonNegativeQueryInt(r, "channelIndex")
 	if err != nil {
-		fail(w, http.StatusBadRequest, "channelId 必须是正整数")
+		fail(w, http.StatusBadRequest, "channelIndex 必须是不小于 0 的整数")
 		return
 	}
 
@@ -45,7 +46,7 @@ func (s *Server) CommunicationMonitor(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusServiceUnavailable, "引擎未启动，无法获取通讯监控数据")
 		return
 	}
-	snapshot, found := s.Engine.CommunicationSnapshot(channelID, deviceIndex, afterSeq, limit)
+	snapshot, found := s.Engine.CommunicationSnapshot(channelIndex, deviceIndex, afterSeq, limit)
 	if !found {
 		fail(w, http.StatusNotFound, "链路未运行或不存在")
 		return
@@ -53,10 +54,15 @@ func (s *Server) CommunicationMonitor(w http.ResponseWriter, r *http.Request) {
 	ok(w, snapshot)
 }
 
-func positiveQueryInt(r *http.Request, key string) (int, error) {
-	v, err := strconv.Atoi(r.URL.Query().Get(key))
-	if err != nil || v <= 0 {
-		return 0, err
+// nonNegativeQueryInt 解析不小于 0 的整数查询参数（通道索引从 0 开始，0 合法）。
+func nonNegativeQueryInt(r *http.Request, key string) (int, error) {
+	raw := r.URL.Query().Get(key)
+	if raw == "" {
+		return 0, fmt.Errorf("缺少 %s", key)
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 0 {
+		return 0, fmt.Errorf("%s 必须是不小于 0 的整数", key)
 	}
 	return v, nil
 }

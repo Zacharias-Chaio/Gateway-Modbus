@@ -1,7 +1,7 @@
 /* ══════════════ 网关设置 ══════════════ */
 const SETTINGS_CARDS = [
   { icon: 'router', title: '网关信息', subtitle: '标识并描述当前网关实例', fields: [
-    { path: 'gateway.gw_id', label: '网关 ID', hint: '仅允许字母、数字、下划线和连字符；重启后生效。' },
+    { path: 'gateway.gw_id', label: '网关 ID', hint: '仅允许gw_xxx格式；重启后生效。' },
     { path: 'gateway.sn', label: '网关 SN', hint: '网关硬件序列号，用于设备追溯。' },
     { path: 'gateway.location', label: '位置信息', hint: '例如：A 厂区 1 号配电室。' }
   ] },
@@ -123,7 +123,7 @@ function renderSettings() {
 
 function renderHardwareCard() {
   const hardware = state.settings.hardware;
-  const categories = [...new Set([...Object.keys(HARDWARE_CATEGORY_META), ...Object.keys(hardware).filter(category => category !== 'Ethernet')])];
+  const categories = [...new Set([...Object.keys(HARDWARE_CATEGORY_META), ...Object.keys(hardware)])];
   const groups = categories.map(category => {
     const entries = hardware[category] || {};
     const meta = HARDWARE_CATEGORY_META[category] || { label: category, icon: 'diagram-3' };
@@ -148,7 +148,6 @@ function removeHardwareRow(button) {
 
 function collectHardwareSettings() {
   const hardware = Object.fromEntries(Object.keys(state.settings.hardware)
-    .filter(category => category !== 'Ethernet')
     .map(category => [category, {}]));
   document.querySelectorAll('.settings-hardware-row').forEach(row => {
     const category = row.dataset.category;

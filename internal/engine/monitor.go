@@ -35,11 +35,11 @@ type CommunicationStats struct {
 // CommunicationSnapshot is an API-safe monitor view for one device or all
 // devices on a channel. DeviceIndex is -1 when the selection is the whole link.
 type CommunicationSnapshot struct {
-	ChannelID   int                  `json:"channelId"`
-	DeviceIndex int                  `json:"deviceIndex"`
-	Stats       CommunicationStats   `json:"stats"`
-	Events      []CommunicationEvent `json:"events"`
-	NextSeq     uint64               `json:"nextSeq"`
+	ChannelIndex int                  `json:"channelIndex"`
+	DeviceIndex  int                  `json:"deviceIndex"`
+	Stats        CommunicationStats   `json:"stats"`
+	Events       []CommunicationEvent `json:"events"`
+	NextSeq      uint64               `json:"nextSeq"`
 }
 
 type communicationCounters struct {
@@ -51,24 +51,24 @@ type communicationCounters struct {
 // commMonitor keeps the current connected session in a bounded in-memory ring.
 // Worker code is its only writer; snapshots may be read concurrently by HTTP.
 type commMonitor struct {
-	mu        sync.RWMutex
-	channelID int
-	capacity  int
-	startedAt time.Time
-	nextSeq   uint64
-	events    []CommunicationEvent
-	total     communicationCounters
-	devices   map[int]communicationCounters
+	mu           sync.RWMutex
+	channelIndex int
+	capacity     int
+	startedAt    time.Time
+	nextSeq      uint64
+	events       []CommunicationEvent
+	total        communicationCounters
+	devices      map[int]communicationCounters
 }
 
-func newCommMonitor(channelID, capacity int) *commMonitor {
+func newCommMonitor(channelIndex, capacity int) *commMonitor {
 	if capacity <= 0 {
 		capacity = defaultCommEventCapacity
 	}
 	return &commMonitor{
-		channelID: channelID,
-		capacity:  capacity,
-		devices:   make(map[int]communicationCounters),
+		channelIndex: channelIndex,
+		capacity:     capacity,
+		devices:      make(map[int]communicationCounters),
 	}
 }
 
@@ -163,7 +163,7 @@ func (m *commMonitor) snapshot(deviceIndex int, afterSeq uint64, limit int) Comm
 		events = events[len(events)-limit:]
 	}
 	return CommunicationSnapshot{
-		ChannelID: m.channelID, DeviceIndex: deviceIndex, Stats: stats,
+		ChannelIndex: m.channelIndex, DeviceIndex: deviceIndex, Stats: stats,
 		Events: events, NextSeq: m.nextSeq,
 	}
 }

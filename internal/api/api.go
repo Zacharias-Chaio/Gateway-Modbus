@@ -25,12 +25,12 @@ type Server struct {
 // EngineFacade 汇总引擎对 API 层暴露的全部能力，
 // 由运行时管理器实现。接口化以避免 api 直接依赖引擎内部细节。
 type EngineFacade interface {
-	// Submit 投递一条写命令。
-	Submit(channelID int, cmd engine.WriteCommand) bool
-	// Values 返回指定链路的实时值快照。
-	Values(channelID int) map[string]engine.SessionEntry
+	// Submit 投递一条写命令（按通道索引定位链路）。
+	Submit(channelIndex int, cmd engine.WriteCommand) bool
+	// Values 返回指定链路（按通道索引）的实时值快照。
+	Values(channelIndex int) map[string]engine.SessionEntry
 	// CommunicationSnapshot returns communication packets and per-session statistics.
-	CommunicationSnapshot(channelID, deviceIndex int, afterSeq uint64, limit int) (engine.CommunicationSnapshot, bool)
+	CommunicationSnapshot(channelIndex, deviceIndex int, afterSeq uint64, limit int) (engine.CommunicationSnapshot, bool)
 }
 
 // RuntimeFacade exposes the restartable runtime resources used by the HTTP API.

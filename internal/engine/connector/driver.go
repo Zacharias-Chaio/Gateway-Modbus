@@ -34,15 +34,6 @@ type Driver interface {
 	Refresh() error
 	// Close 关闭底层连接，可重复调用。
 	Close() error
-	// Info 返回链路的类型、目标地址与当前是否已打开。
-	Info() Info
-}
-
-// Info 描述链路的运行期信息。
-type Info struct {
-	Type   string `json:"type"`   // Serial / Network
-	Target string `json:"target"` // 串口节点 / IP:Port
-	Open   bool   `json:"open"`   // 底层连接是否已建立
 }
 
 // Config 是从 store.Channel.Config（JSON）解析出的驱动参数，

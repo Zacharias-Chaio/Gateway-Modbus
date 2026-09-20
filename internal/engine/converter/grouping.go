@@ -16,10 +16,13 @@ const DefaultMaxRegs = 125
 //     的属性归入同一读请求，一次 EncodeRead 从 base 开始连续读取。
 //   - registerOffset：相对于基址的偏移量（寄存器个数，非字节），用于从响应帧中
 //     定位该属性的起始位置：字节偏移 = registerOffset × 2。
-//   - startBit / endBit：在该属性寄存器区间的位级定位（bit 0 = 最低位）。
-//     占用寄存器数 = ceil((endBit + 1) / 16)，约束 endBit - startBit < regCount × 16。
-//     例如 startBit=0,endBit=0 → 提取最低 1 位（1 寄存器）；
-//     startBit=0,endBit=31 → 全部 32 位（2 寄存器）。
+//   - startBit / endBit：在该属性寄存器区间的位级定位（bit 0 = 最低位），
+//     约束 endBit 落在 registerCount × 16 位宽度内。例如 startBit=0,endBit=0 →
+//     提取最低 1 位；startBit=0,endBit=31 → 全部 32 位。
+//   - registerCount：寄存器数量（读取跨度），必填 1~125，由 buildDevicePlan 校验。
+//     设计约定：寄存器数量与位区间（数据长度）无强制对应——位区间只定义
+//     解析时取数据中的多少位换算工程值（如 1 寄存器 16 位可只取前 8 位），
+//     读取跨度由 registerCount 独立指定。
 //   - string 类型不走位提取，忽略 startBit/endBit，按字节级处理。
 //
 // 分组规则：
@@ -33,7 +36,7 @@ type PropMeta struct {
 	PropID       string  `json:"id"`
 	DataType     string  `json:"dataType"`
 	StartBit     int     `json:"startBit"`       // 起始位（bit 0 = 最低位）
-	EndBit       int     `json:"endBit"`         // 终止位（含），regCount = ceil((endBit+1)/16)
+	EndBit       int     `json:"endBit"`         // 终止位（含），须落在 registerCount × 16 位宽度内
 	Offset       int     `json:"registerOffset"` // 相对基址的寄存器偏移，实际地址 = registerBase + registerOffset
 	RegisterBase int     `json:"registerBase"`   // 寄存器基址（分组的依据）
 	ReadFC       int     `json:"readFunctionCode"`
@@ -45,9 +48,8 @@ type PropMeta struct {
 	Unit         string  `json:"unit"`        // 工程量单位（遥测上报用）
 	Description  string  `json:"description"` // 属性值描述（遥测上报用）
 
-	// Legacy 别名，仅用于向后兼容旧 JSON 数据（base → deltaValue, dataLength 逆向推导）。
-	LegacyBase       float64 `json:"base,omitempty"`
-	LegacyDataLength *int    `json:"dataLength,omitempty"`
+	// RegisterCount 寄存器数量（读取跨度），必填 1~125；由 buildDevicePlan 统一校验。
+	RegisterCount int `json:"registerCount"`
 }
 
 // RegGroup 是一次读请求对应的寄存器组。
@@ -63,24 +65,6 @@ type GroupMember struct {
 	Prop       PropMeta
 	ByteOffset int // 在响应数据中的字节偏移（= offset * 2）
 	ByteLen    int // 该属性的字节长度（= regCount * 2）
-}
-
-// RegCount 返回该属性占用的寄存器数（由 startBit/endBit 推导）。
-// string 类型或 endBit < 0 时返回 1。
-func (p PropMeta) RegCount() int {
-	if p.EndBit < 0 {
-		return 1
-	}
-	return BitsToRegCount(p.EndBit)
-}
-
-// BitsToRegCount 将最高位序号转换为需要的寄存器数（每寄存器 16 bit）。
-// endBit=0 → 1, endBit=15 → 1, endBit=16 → 2, endBit=31 → 2。
-func BitsToRegCount(endBit int) int {
-	if endBit < 0 {
-		return 1
-	}
-	return endBit/16 + 1
 }
 
 // BuildGroups 将设备的属性列表按 (readFC, registerBase) 分组。
@@ -122,7 +106,7 @@ func BuildGroups(props []PropMeta, maxRegs int) []RegGroup {
 	for k, members := range buckets {
 		maxEnd := 0
 		for _, m := range members {
-			end := m.Offset + m.RegCount()
+			end := m.Offset + m.RegisterCount
 			if end > maxEnd {
 				maxEnd = end
 			}
@@ -141,15 +125,14 @@ func BuildGroups(props []PropMeta, maxRegs int) []RegGroup {
 			var segMembers []GroupMember
 			for i, m := range members {
 				mStart := m.Offset // 属性在原始 bucket 中的寄存器偏移
-				mEnd := m.Offset + m.RegCount()
+				mEnd := m.Offset + m.RegisterCount
 				// 属性必须完全落在当前段内
 				if mStart >= start && mEnd <= end {
 					captured[i] = true
-					rc := m.RegCount()
 					segMembers = append(segMembers, GroupMember{
 						Prop:       m,
 						ByteOffset: (m.Offset - start) * 2, // 相对段起始的字节偏移
-						ByteLen:    rc * 2,
+						ByteLen:    m.RegisterCount * 2,
 					})
 				}
 			}
@@ -170,15 +153,14 @@ func BuildGroups(props []PropMeta, maxRegs int) []RegGroup {
 			if captured[i] {
 				continue
 			}
-			rc := m.RegCount()
 			groups = append(groups, RegGroup{
 				ReadFC:    k.fc,
 				StartAddr: k.base + m.Offset,
-				Quantity:  rc,
+				Quantity:  m.RegisterCount,
 				Members: []GroupMember{{
 					Prop:       m,
 					ByteOffset: 0,
-					ByteLen:    rc * 2,
+					ByteLen:    m.RegisterCount * 2,
 				}},
 			})
 		}
@@ -209,7 +191,7 @@ func FindWriteProp(props []PropMeta, propName string) (PropMeta, error) {
 // canRead 判断属性是否可读。
 func canRead(access string) bool {
 	switch access {
-	case "r", "rw", "R", "RW", "":
+	case "r", "rw":
 		return true
 	}
 	return false
@@ -218,7 +200,7 @@ func canRead(access string) bool {
 // canWrite 判断属性是否可写。
 func canWrite(access string) bool {
 	switch access {
-	case "w", "rw", "W", "RW":
+	case "w", "rw":
 		return true
 	}
 	return false

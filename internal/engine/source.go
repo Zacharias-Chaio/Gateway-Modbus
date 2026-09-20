@@ -6,7 +6,8 @@ import "context"
 // 引擎不依赖存储层（GORM / SQLite）的具体类型；配置读取被收敛为单一边界：
 // 进程内由 SQLite 实现，接入远程配置中心时仅需替换 PlanSource 实现，引擎与 worker 不变。
 type ChannelSpec struct {
-	ID      int
+	ID      string // 通道ID，格式 Channel-{通道索引}，自动生成不可修改
+	Index   int    // 通道索引，从 0 开始，引擎以索引定位链路 worker
 	Name    string
 	Type    string // Serial / Network
 	Config  []byte // 链路配置 JSON（透传给 connector.ParseConfig）

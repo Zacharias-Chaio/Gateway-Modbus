@@ -18,12 +18,12 @@ import (
 
 // workerState 描述一条链路 worker 的运行状态。
 type workerState struct {
-	ID        int    `json:"id"`
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Target    string `json:"target"`
-	Connected bool   `json:"connected"`
-	LastError string `json:"lastError,omitempty"`
+	ChannelIndex int    `json:"channelIndex"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	Target       string `json:"target"`
+	Connected    bool   `json:"connected"`
+	LastError    string `json:"lastError,omitempty"`
 }
 
 // sessionEntry 是单个属性的实时值缓存条目（内部使用，API 层看 SessionEntry）。
@@ -32,12 +32,12 @@ type sessionEntry = SessionEntry
 // worker 承载一条链路：独占一个 Driver，在自己的 goroutine 中管理连接生命周期
 // 与协议轮询、写命令下发。
 type worker struct {
-	id   int
-	name string
-	fp   string // 配置指纹，用于热重载时判断是否需要重启
-	cfg  connector.Config
-	drv  connector.Driver
-	plan ChannelPlan
+	index int // 通道索引（从 0 开始）
+	name  string
+	fp    string // 配置指纹，用于热重载时判断是否需要重启
+	cfg   connector.Config
+	drv   connector.Driver
+	plan  ChannelPlan
 
 	log    *slog.Logger
 	cancel context.CancelFunc
@@ -59,20 +59,20 @@ type worker struct {
 }
 
 // newWorker 构造 worker，此时尚未启动 goroutine。
-func newWorker(id int, name, fp string, cfg connector.Config, drv connector.Driver, plan ChannelPlan, sink EventSink) *worker {
+func newWorker(index int, name, fp string, cfg connector.Config, drv connector.Driver, plan ChannelPlan, sink EventSink) *worker {
 	return &worker{
-		id:      id,
-		name:    name,
-		fp:      fp,
-		cfg:     cfg,
-		drv:     drv,
-		plan:    plan,
-		log:     logx.Module("engine"),
-		done:    make(chan struct{}),
-		writeCh: make(chan WriteCommand, 32),
-		data:    make(map[string]sessionEntry),
-		monitor: newCommMonitor(id, defaultCommEventCapacity),
-		sink:    sink,
+		index:     index,
+		name:      name,
+		fp:        fp,
+		cfg:       cfg,
+		drv:       drv,
+		plan:      plan,
+		log:       logx.Module("engine"),
+		done:      make(chan struct{}),
+		writeCh:   make(chan WriteCommand, 32),
+		data:      make(map[string]sessionEntry),
+		monitor:   newCommMonitor(index, defaultCommEventCapacity),
+		sink:      sink,
 	}
 }
 
@@ -143,7 +143,7 @@ func (w *worker) publishTelemetry(deviceIndex int, online bool) {
 		w.addOnlineTelemetry(properties, dev, int64(0), now)
 	}
 	w.sink.PublishTelemetry(TelemetryEvent{
-		ChannelID: w.id, DeviceIndex: deviceIndex, DeviceName: dev.DisplayName(),
+		ChannelIndex: w.index, DeviceIndex: deviceIndex, DeviceName: dev.DisplayName(),
 		CommNo: int(dev.UnitID), ModelID: dev.ModelID, ModelName: dev.ModelName,
 		Online: online, Properties: properties, Timestamp: now,
 	})
@@ -169,7 +169,7 @@ func (w *worker) publishWriteResult(cmd WriteCommand, err error) {
 		return
 	}
 	event := WriteResultEvent{
-		RequestID: cmd.RequestID, ChannelID: w.id, DeviceIndex: cmd.DeviceIndex,
+		RequestID: cmd.RequestID, ChannelIndex: w.index, DeviceIndex: cmd.DeviceIndex,
 		OK: err == nil, Timestamp: time.Now(),
 	}
 	if err != nil {
@@ -558,7 +558,7 @@ func (w *worker) execWrite(ctx context.Context, cmd WriteCommand) error {
 				buf = append(buf, tmp[:n]...)
 			}
 			err = dev.Conv.DecodeWrite(buf, tid, dev.UnitID, byte(prop.WriteFC),
-				prop.RegisterBase+prop.Offset, prop.RegCount())
+				prop.RegisterBase+prop.Offset, prop.RegisterCount)
 			if err == nil {
 				w.logRX(dev, "write", attempt, buf, time.Since(sentAt))
 				w.monitor.complete(cmd.DeviceIndex, dev.UnitID, "write", attempt, nil, time.Since(transactionStarted))
@@ -596,12 +596,12 @@ func (w *worker) state() workerState {
 	connected, lastErr := w.connected, w.lastErr
 	w.mu.Unlock()
 	return workerState{
-		ID:        w.id,
-		Name:      w.name,
-		Type:      w.cfg.Type,
-		Target:    w.cfg.Target(),
-		Connected: connected,
-		LastError: lastErr,
+		ChannelIndex: w.index,
+		Name:         w.name,
+		Type:         w.cfg.Type,
+		Target:       w.cfg.Target(),
+		Connected:    connected,
+		LastError:    lastErr,
 	}
 }
 

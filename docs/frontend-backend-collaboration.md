@@ -149,9 +149,9 @@ type Alert struct {
 #### 设计规范
 
 - **主键策略**：
-  - UUID：业务可在前端生成的实体（如设备模型）
-  - 自增 int：链路类实体，SQLite AUTOINCREMENT 分配
-  - **关键**：更新时先 `First` 查存在性再 `Save`，避免伪造主键插入脏数据（参考 [channel.go](file:///f:/Code/Gateway/internal/api/channel.go)）
+  - 业务可生成 ID：业务可在前端生成的实体（如设备模型，规则 `Profile-{档案索引}`）
+  - 规则生成 ID：通道索引从 0 开始、取最小未占用值，通道ID 按规则 `Channel-{通道索引}` 由服务端合成，二者均不可修改（参考 [channel.go](file:///f:/Code/Gateway/internal/api/channel.go)）
+  - **关键**：更新时先 `First` 查存在性再 `Save`，避免伪造主键插入脏数据；通道索引 / 通道ID 更新时保留库中原值
 - **时间字段**：`CreatedAt/UpdatedAt` 标 `json:"-"`，避免泄露与前端误改；更新前先读出原 `CreatedAt` 保留
 - **JSON Blob**：扩展性强的字段（如配置、规则、属性表）用 `datatypes.JSON`，字段扩展无需改表
 - **列表查询**：统一 `Order("id asc")` 或 `Order("xxx_index asc")`

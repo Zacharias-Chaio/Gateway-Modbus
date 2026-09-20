@@ -109,10 +109,3 @@ func (d *tcpDriver) Close() error {
 	}
 	return conn.Close()
 }
-
-func (d *tcpDriver) Info() Info {
-	d.mu.Lock()
-	open := d.conn != nil
-	d.mu.Unlock()
-	return Info{Type: TypeNetwork, Target: d.addr, Open: open}
-}

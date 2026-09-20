@@ -12,7 +12,7 @@ const ACCESS_FROM_LABEL = { '只读':'r', '只写':'w', '读写':'rw', 'R':'r', 
 const CHANNEL_TYPE_LABEL = { Serial:'串口通道', Network:'网络通道' };
 const CHANNEL_TYPE_ICON = { Serial:'usb-symbol', Network:'ethernet' };
 const PARITY_LABEL = { None:'无', Even:'偶校验', Odd:'奇校验' };
-const CSV_HEADERS = ['属性ID','属性名称','属性描述','数据类型','起始位','终止位','读写属性','偏移量','数据系数','数据单位','读功能码','写功能码','寄存器基址','寄存器偏移','字节顺序'];
+const CSV_HEADERS = ['属性ID','属性名称','属性描述','数据类型','起始位','终止位','读写属性','偏移量','数据系数','数据单位','读功能码','写功能码','寄存器基址','寄存器偏移','寄存器数量','字节顺序'];
 const CSV_FIELD_MAP = {
   '属性ID':'id','id':'id',
   '属性名称':'name','名称':'name','name':'name',
@@ -29,6 +29,7 @@ const CSV_FIELD_MAP = {
   '写功能码':'writeFunctionCode','writefunctioncode':'writeFunctionCode',
   '寄存器基址':'registerBase','寄存器地址':'registerBase','registerbase':'registerBase','registeraddress':'registerBase',
   '寄存器偏移':'registerOffset','位偏移':'registerOffset','registeroffset':'registerOffset','bitoffset':'registerOffset',
+  '寄存器数量':'registerCount','寄存器数':'registerCount','registercount':'registerCount',
   '字节顺序':'byteOrder','byteorder':'byteOrder'
 };
 

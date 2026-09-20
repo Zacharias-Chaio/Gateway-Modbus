@@ -21,7 +21,7 @@ var ErrInvalidValue = errors.New("写入值无效")
 //
 // 返回完整的 PDU（功能码+数据），可直接传给 FrameIO.EncodeWrite。
 func EncodeValuePDU(prop PropMeta, rawVal float64, startAddr int) ([]byte, error) {
-	regCount := prop.RegCount()
+	regCount := prop.RegisterCount
 	switch strings.ToLower(prop.DataType) {
 	case "bool":
 		// 单线圈写入 FC=05

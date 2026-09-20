@@ -1,9 +1,11 @@
 {
-  "id": 1,
+  "id": "Channel-0",
+  "channelIndex": 0,
   "name": "一楼电力监测",
   "type": "Network",
   "config": {
-    "id": 1,
+    "id": "Channel-0",
+    "channelIndex": 0,
     "name": "一楼电力监测",
     "type": "Network",
     "frameInterval": 100,
@@ -17,7 +19,7 @@
         "index": 0,
         "commNo": 1,
         "name": "1#进线柜电表",
-        "modelId": "a1b2c3d4-e5f6-4a7b-8c9d-0123456789ab",
+        "modelId": "Profile-0",
         "modelName": "三相电力仪表"
       }
     ]
@@ -27,7 +29,7 @@
       "index": 0,
       "commNo": 1,
       "name": "1#进线柜电表",
-      "modelId": "a1b2c3d4-e5f6-4a7b-8c9d-0123456789ab",
+      "modelId": "Profile-0",
       "modelName": "三相电力仪表"
     }
   ]

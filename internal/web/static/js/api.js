@@ -38,8 +38,9 @@ async function loadSystemInfo() {
   }
 }
 /* ── 链路持久化（/api/channels）── */
+// 通道索引从 0 开始、通道ID 按规则 Channel-[通道索引] 生成，均由后端分配且不可修改。
 function channelFromRow(r) {
-  return { id: toNum(r.id, 0), name: r.name || '', type: r.type || '',
+  return { id: String(r.id || ''), channelIndex: toNum(r.channelIndex, null), name: r.name || '', type: r.type || '',
     reconnectRetries: r.config && r.config.reconnectRetries, resendRetries: r.config && r.config.resendRetries, pollInterval: r.config && r.config.pollInterval,
     serialName: hwKey('Serial', r.config && r.config.serialName), baudRate: r.config && r.config.baudRate, dataBits: r.config && r.config.dataBits, parity: r.config && r.config.parity, stopBits: r.config && r.config.stopBits,
     deviceIp: r.config && r.config.deviceIp, devicePort: r.config && r.config.devicePort,
@@ -47,7 +48,8 @@ function channelFromRow(r) {
 }
 function channelToPayload(c) {
   const config = buildChannelConfig(c);
-  return { id: toNum(c.id, 0), name: c.name || '', type: c.type || '', config: config, devices: config.devices || [] };
+  // id 为空串表示新建：通道索引与通道ID 由服务端生成后回填。
+  return { id: c.id || '', name: c.name || '', type: c.type || '', config: config, devices: config.devices || [] };
 }
 async function loadChannels() {
   try {

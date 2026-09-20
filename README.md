@@ -126,16 +126,17 @@ Remove-Item Env:\GOOS, Env:\GOARCH, Env:\CGO_ENABLED
 | `name` / `id` | 属性名 / 属性 ID（遥测发布按 ID 索引） |
 | `dataType` | `bool` / `int` / `float` / `string` |
 | `registerBase` / `registerOffset` | 寄存器基址 / 相对偏移，实际地址 = 基址 + 偏移 |
-| `startBit` / `endBit` | 位段提取（bit 0 = 最低位）；占用寄存器数由 endBit 推导 |
+| `startBit` / `endBit` | 位段提取（bit 0 = 最低位），须落在 `registerCount × 16` 位宽度内 |
+| `registerCount` | 寄存器数量（读取跨度），必填 1~125，缺失时构建采集计划报错 |
 | `readFunctionCode` | 01 / 02 / 03 / 04 |
 | `writeFunctionCode` | 05 / 06 / 16 |
 | `coefficient` / `deltaValue` | 工程值 = 原始值 × coefficient + deltaValue（写值时逆变换） |
 | `byteOrder` | `ABCD` / `CDAB` / `BADC` / `DCBA`（16 位为 `AB` / `BA`） |
 | `accessMode` | `r` / `w` / `rw` |
 
-旧字段 `base` / `dataLength` 仍兼容读取。示例见 [docs/device-model.example.json](docs/device-model.example.json)。
+示例见 [docs/device-model.example.json](docs/device-model.example.json)。
 
-- **链路通道（Channel）** = 类型（`Serial` / `Network`，CAN 已移除）+ 通信参数 + 挂载设备列表（`[{index, commNo, modelId}]`，`commNo` 为 Modbus 从站地址 1-247）。示例见 [docs/channel.example.json](docs/channel.example.json)。
+- **链路通道（Channel）** = 通道索引（从 0 开始自动分配、不可修改）+ 通道ID（规则 `Channel-{通道索引}`，自动生成不可修改）+ 类型（`Serial` / `Network`，CAN 已移除）+ 通信参数 + 挂载设备列表（`[{index, commNo, modelId}]`，`commNo` 为 Modbus 从站地址 1-247）。示例见 [docs/channel.example.json](docs/channel.example.json)。
 
 ### 2. 采集计划与寄存器分组
 
@@ -190,13 +191,12 @@ Remove-Item Env:\GOOS, Env:\GOARCH, Env:\CGO_ENABLED
 | GET | `/api/models` | 设备模型列表 |
 | POST | `/api/models` | 新建 / 更新模型（按 ID upsert） |
 | DELETE | `/api/models/{id}` | 删除模型 |
-| GET | `/api/channels` | 链路列表 |
-| POST | `/api/channels` | 新建 / 更新链路（含串口 / IP:Port 冲突检测） |
-| DELETE | `/api/channels/{id}` | 删除链路 |
-| GET | `/api/realtime?device={channelId}/{deviceIndex}` | 该设备的全部缓存实时值 |
-| POST | `/api/set` | 下发写值：`{channelId, deviceIndex, propName, value}` |
-| GET | `/api/comm-monitor?channelId=&deviceIndex=&afterSeq=&limit=` | 通讯报文 + 会话统计（`limit` ≤ 1000） |
-| GET | `/api/logs` | 业务日志提示（通讯日志走 syslog） |
+| GET | `/api/channels` | 链路列表（按通道索引升序） |
+| POST | `/api/channels` | 新建 / 更新链路（含串口 / IP:Port 冲突检测；通道索引与通道ID 服务端生成、不可修改） |
+| DELETE | `/api/channels/{id}` | 删除链路（`id` 为字符串通道ID，如 `Channel-0`） |
+| GET | `/api/realtime?device={channelIndex}/{deviceIndex}` | 该设备的全部缓存实时值（通道索引从 0 开始） |
+| POST | `/api/set` | 下发写值：`{channelIndex, deviceIndex, propName, value}` |
+| GET | `/api/comm-monitor?channelIndex=&deviceIndex=&afterSeq=&limit=` | 通讯报文 + 会话统计（`limit` ≤ 1000） |
 | GET | `/api/hardware` | 硬件接口映射（丝印 → 设备节点） |
 | GET / POST | `/api/settings` | 读取 / 保存网关设置 |
 | GET | `/api/system-info` | 操作系统、系统时间、Gateway 版本 |
@@ -247,16 +247,13 @@ Remove-Item Env:\GOOS, Env:\GOARCH, Env:\CGO_ENABLED
 Serial:        # 串口
   COM1: /dev/ttyS1
   COM2: /dev/ttyS2
-Ethernet:      # 以太网
-  ETH1: eth0
-  ETH2: eth2
 ```
 
 ## 目录结构
 
 ```
 Gateway/
-├── main.go                        # 入口：参数解析、CAN 历史链路清理、信号处理、优雅关闭
+├── main.go                        # 入口：参数解析、信号处理、优雅关闭
 ├── internal/
 │   ├── api/                       # REST 处理器（model / channel / realtime / comm / settings…）
 │   ├── buildinfo/                 # 版本号（构建时 -ldflags 注入）
@@ -326,7 +323,6 @@ journalctl -u gateway -f
 | 启动报「打开数据库失败」 | 检查 `-db` 目录写权限；一般让程序自动创建 `data/` |
 | 端口被占用 / 无法访问 | `-addr` 换端口；确认防火墙放行且使用设备实际 IP |
 | 保存链路报冲突 | 同一串口节点或 IP:Port 已被其它链路占用，网关禁止复用 |
-| 升级后 CAN 链路消失 | 业务已收窄为 Modbus-only，启动时自动物理删除历史 CAN 链路记录并写日志 |
 | 链路状态未连接 | 检查目标地址 / 串口节点与权限、设备供电；失败后每 3 秒自动重连 |
 | 实时数据为空 | 确认链路已连接且设备轮询成功；`GET /api/engine/status` 查看链路状态 |
 | 读取偶发超时 | 半双工总线下调大 `frameInterval`；噪声环境增加 `resendRetries` |
@@ -336,7 +332,6 @@ journalctl -u gateway -f
 ## 已知限制
 
 - **TCP 半开连接依赖 keepalive**：已启用 30s TCP keepalive，内核探测失败会让阻塞读取返回错误并触发重连；但 NAT 网络中探测周期可能被中间设备放大，极端场景仍需应用层轮询失败计数兜底。
-- **`/api/logs` 为提示性接口**：通讯日志已并入 syslog 统一出口，查看 `/api/syslog` 或 SSE 流。
 - **引擎状态为 HTTP 快照**：`/api/engine/status` 无推送，前端轮询获取。
 - **写值不做独占排队回执**：HTTP `POST /api/set` 返回 `accepted` 表示已入队，最终结果经 NATS `cmdAck` 发布（HTTP 调用方暂无同步回执）。
 

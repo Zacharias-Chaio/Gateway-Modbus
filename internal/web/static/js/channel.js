@@ -1,8 +1,16 @@
 /* ══════════════ 链路配置 · Channels ══════════════ */
 function emptyChannel() {
-  return { id: 0, name:'', type:'', reconnectRetries:'0', resendRetries:'3', pollInterval:'500', serialName:'', baudRate:'9600', dataBits:'8', parity:'None', stopBits:'1',
+  return { id: '', channelIndex: null, name:'', type:'', reconnectRetries:'0', resendRetries:'3', pollInterval:'500', serialName:'', baudRate:'9600', dataBits:'8', parity:'None', stopBits:'1',
     deviceIp:'', devicePort:'', devices: [] };
 }
+// 通道索引分配：从 0 开始取最小未占用值（与档案索引规则一致），后端保存时再次校验分配。
+function nextChannelIndex() {
+  let n = 0;
+  while (state.channels.some(c => toNum(c.channelIndex, -1) === n)) n++;
+  return n;
+}
+// 通道ID 生成规则：Channel-[通道索引]，自动生成、不可修改。
+function channelIdFromIndex(n) { return 'Channel-' + n; }
 function onChannelTypeChange() {
   const t = document.getElementById('ch-type').value;
   document.getElementById('ch-grp-serial').classList.toggle('d-none', t !== 'Serial');
@@ -38,13 +46,6 @@ function hwKey(category, node) {
   const map = (state.hardware && state.hardware[category]) || {};
   for (const k of Object.keys(map)) { if (String(map[k]) === String(node)) return k; }
   return node;
-}
-function normalizeChannelDevices(c) {
-  if (!c) return;
-  if (!Array.isArray(c.devices)) {
-    c.devices = Array.isArray(c.modelIds) ? c.modelIds.map((id, i) => ({ commNo: i + 1, name: '', modelId: id })) : [];
-  }
-  delete c.modelIds;
 }
 function nextCommNo(devices) {
   const used = (devices || []).map(d => Number(d.commNo)).filter(n => Number.isInteger(n) && n > 0);
@@ -168,6 +169,9 @@ function validateChannelConflict(report = true) {
 /* ── 链路配置向导（1·链路配置 2·设备配置 3·预览） ── */
 function newChannel() {
   state.channel = emptyChannel();
+  // 通道索引从 0 开始自动分配；通道ID 按 Channel-[通道索引] 生成，二者均不可修改。
+  state.channel.channelIndex = nextChannelIndex();
+  state.channel.id = channelIdFromIndex(state.channel.channelIndex);
   channelEditIndex = -1;
   enterChannelWizard();
 }
@@ -198,12 +202,13 @@ function backToChannelList() {
 }
 function fillChannelForm() {
   const c = state.channel || emptyChannel();
-  setVal('ch-id', c.id); setVal('ch-name', c.name); setVal('ch-type', c.type);
+  // 通道索引 / 通道ID 为自动生成的只读展示，不参与表单回读。
+  setVal('ch-index', c.channelIndex); setVal('ch-id', c.id || (c.channelIndex == null ? '' : channelIdFromIndex(c.channelIndex)));
+  setVal('ch-name', c.name); setVal('ch-type', c.type);
   setVal('ch-reconnectRetries', c.reconnectRetries); setVal('ch-resendRetries', c.resendRetries); setVal('ch-pollInterval', c.pollInterval);
   setVal('ch-baud', c.baudRate); setVal('ch-dataBits', c.dataBits);
   setVal('ch-parity', c.parity); setVal('ch-stopBits', c.stopBits);
   setVal('ch-deviceIp', c.deviceIp); setVal('ch-devicePort', c.devicePort);
-  normalizeChannelDevices(state.channel);
   renderChannelDeviceTable();
   onChannelTypeChange();
 }
@@ -257,10 +262,12 @@ function saveChannel() {
   if (!validateChannelConflict()) { chGoStep(1); return; }
   if (!validateChannelDevices()) { chGoStep(2); return; }
   const payload = channelToPayload(state.channel);
-  const wasNew = toNum(state.channel.id, 0) === 0;
+  const wasNew = !state.channel.id;
   apiPost('/channels', payload)
     .then(saved => {
-      state.channel.id = toNum(saved && saved.id, payload.id); // 新建时回填后端分配的自增 id
+      // 新建时回填后端分配的通道索引与通道ID（Channel-{索引}），二者此后不可修改。
+      if (saved && saved.id) state.channel.id = String(saved.id);
+      if (saved && saved.channelIndex != null) state.channel.channelIndex = toNum(saved.channelIndex, state.channel.channelIndex);
       const ch = deepCopy(state.channel);
       if (channelEditIndex >= 0) state.channels[channelEditIndex] = ch;
       else { state.channels.push(ch); channelEditIndex = state.channels.length - 1; }
@@ -274,7 +281,7 @@ function buildChannelConfig(c) {
     const m = state.models.find(x => String(x.id) === String(d.modelId));
     return { index: i, commNo: toNum(d.commNo, null), name: d.name || '', modelId: d.modelId || null, modelName: (m && m.profile && m.profile.name) || null };
   });
-  const base = { id: c.id, name: c.name, type: c.type,
+  const base = { id: c.id || '', channelIndex: toNum(c.channelIndex, null), name: c.name, type: c.type,
     reconnectRetries: toNum(c.reconnectRetries, null), resendRetries: toNum(c.resendRetries, null), pollInterval: toNum(c.pollInterval, null),
     devices };
   if (c.type === 'Serial') Object.assign(base, { serialName: hwNode('Serial', c.serialName), baudRate: toNum(c.baudRate, null), dataBits: toNum(c.dataBits, null), parity: c.parity, stopBits: c.stopBits });
@@ -285,7 +292,7 @@ function deleteChannel(idx) {
   if (!confirm('确定删除该链路？')) return;
   const c = state.channels[idx];
   if (!c) return;
-  apiDelete('/channels/' + encodeURIComponent(toNum(c.id, 0)))
+  apiDelete('/channels/' + encodeURIComponent(String(c.id || '')))
     .then(() => {
       state.channels.splice(idx, 1);
       if (channelEditIndex === idx) { state.channel = null; channelEditIndex = -1; }
@@ -315,7 +322,7 @@ function renderChannelList() {
             <div class="model-card-icon"><i class="bi bi-${CHANNEL_TYPE_ICON[c.type] || 'diagram-3'}"></i></div>
             <div class="min-w-0">
               <div class="model-card-title">${escapeHtml(c.name || '未命名链路')}</div>
-              <div class="model-card-sub">通道ID：${escapeHtml(String(c.id))} · ${escapeHtml(CHANNEL_TYPE_LABEL[c.type] || '未设置类型')}</div>
+              <div class="model-card-sub">通道ID：${escapeHtml(c.id || (c.channelIndex == null ? '—' : channelIdFromIndex(c.channelIndex)))} · ${escapeHtml(CHANNEL_TYPE_LABEL[c.type] || '未设置类型')}</div>
             </div>
           </div>
           <div class="model-card-tags">${tags}</div>

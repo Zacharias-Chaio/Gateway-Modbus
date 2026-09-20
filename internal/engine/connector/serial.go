@@ -114,13 +114,6 @@ func (d *serialDriver) Close() error {
 	return port.Close()
 }
 
-func (d *serialDriver) Info() Info {
-	d.mu.Lock()
-	open := d.port != nil
-	d.mu.Unlock()
-	return Info{Type: TypeSerial, Target: d.name, Open: open}
-}
-
 // toParity 把配置中的校验位字符串映射为 serial 库枚举。
 func toParity(s string) (serial.Parity, error) {
 	switch s {

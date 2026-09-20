@@ -15,16 +15,16 @@ import (
 // 引擎与 API 均不感知变化。
 type dbPlanSource struct{ db *gorm.DB }
 
-// LoadChannels 按链路 ID 升序返回全部链路。
+// LoadChannels 按通道索引升序返回全部链路。
 func (s *dbPlanSource) LoadChannels(ctx context.Context) ([]engine.ChannelSpec, error) {
 	var rows []store.Channel
-	if err := s.db.WithContext(ctx).Order("id asc").Find(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Order("channel_index asc").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]engine.ChannelSpec, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, engine.ChannelSpec{
-			ID: r.ID, Name: r.Name, Type: r.Type,
+			ID: r.ID, Index: r.ChannelIndex, Name: r.Name, Type: r.Type,
 			Config: []byte(r.Config), Devices: []byte(r.Devices),
 		})
 	}

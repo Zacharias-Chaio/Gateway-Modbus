@@ -141,7 +141,7 @@
                   </div>
                   <div class="col-md-6">
                     <label class="form-label fw-semibold">档案ID</label>
-                    <input type="text" class="form-control" id="pf-profileId" placeholder="自动生成" readonly>
+                    <input type="text" class="form-control" id="pf-profileId" placeholder="自动生成（Profile-N）" readonly>
                   </div>
                   <div class="col-md-6">
                     <label class="form-label fw-semibold">档案名称 <span class="text-danger">*</span></label>
@@ -257,7 +257,7 @@
                 <table class="table table-hover align-middle">
                   <thead>
                     <tr>
-                      <th>索引</th><th>属性ID</th><th>名称</th><th>数据类型</th><th>偏移量</th><th>系数</th><th>单位</th><th>读写</th><th>位区间</th><th style="width:90px">操作</th>
+                      <th>索引</th><th>属性ID</th><th>名称</th><th>数据类型</th><th>偏移量</th><th>系数</th><th>单位</th><th>读写</th><th>寄存器地址</th><th>位区间</th><th style="width:90px">操作</th>
                     </tr>
                   </thead>
                   <tbody id="props-tbody"></tbody>
@@ -362,8 +362,14 @@
                   <div class="form-section-divider"><span><i class="bi bi-info-circle me-1"></i>通道信息</span></div>
                   <div class="row g-3">
                     <div class="col-md-6">
+                      <label class="form-label fw-semibold">通道索引</label>
+                      <input type="number" min="0" step="1" class="form-control" id="ch-index" placeholder="自动分配" readonly>
+                      <div class="form-text">从 0 开始自动分配，不可修改</div>
+                    </div>
+                    <div class="col-md-6">
                       <label class="form-label fw-semibold">通道ID</label>
                       <input type="text" class="form-control" id="ch-id" placeholder="自动生成" readonly>
+                      <div class="form-text">生成规则 Channel-[通道索引]，自动生成、不可修改</div>
                     </div>
                     <div class="col-md-6">
                       <label class="form-label fw-semibold">链路名称 <span class="text-danger">*</span></label>
@@ -616,9 +622,9 @@
               <input type="text" class="form-control" id="pm-index" placeholder="自动生成" readonly>
             </div>
             <div class="col-md-6">
-              <label class="form-label fw-semibold">属性ID <span class="text-danger">*</span></label>
-              <input type="text" class="form-control" id="pm-id" required pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder="如 online">
-              <div class="invalid-feedback">需以字母或下划线开头，仅含字母、数字、下划线</div>
+              <label class="form-label fw-semibold">属性ID</label>
+              <input type="text" class="form-control" id="pm-id" pattern="[A-Za-z_][A-Za-z0-9_-]*" placeholder="自动生成（Property-N）" readonly>
+              <div class="invalid-feedback">自动生成，不可修改</div>
             </div>
             <div class="col-md-6">
               <label class="form-label fw-semibold">属性名称 <span class="text-danger">*</span></label>
@@ -627,11 +633,11 @@
             </div>
             <div class="col-6">
               <label class="form-label fw-semibold">属性描述</label>
-              <input type="text" class="form-control" id="pm-desc" placeholder="属性描述（0-状态a 1-状态b 2-状态c）">
+              <input type="text" class="form-control" id="pm-desc" placeholder="属性描述{&quot;desc1&quot;:0, &quot;desc2&quot;:1, &quot;desc3&quot;:2}">
             </div>
           </div>
 
-            <div class="form-section-divider"><span><i class="bi bi-hdd-stack me-1"></i>协议映射（可选）</span></div>
+            <div class="form-section-divider"><span><i class="bi bi-hdd-stack me-1"></i>协议映射 <span class="text-danger">*</span></span></div>
             <div class="alert alert-info py-2 mb-2 small">
               <i class="bi bi-info-circle me-1"></i>
               实际寄存器地址 = <strong>基址 + 偏移</strong>。相同<strong>基址 + 功能码</strong>的属性会自动合并为一次读请求。
@@ -670,12 +676,16 @@
                 </select>
             </div>
             <div class="col-md-4">
-                <label class="form-label fw-semibold">寄存器基址</label>
+                <label class="form-label fw-semibold">寄存器基址 <span class="text-danger">*</span></label>
                 <input type="number" step="1" class="form-control" id="pm-regbase" placeholder="如 0 或 40001" onblur="normRegField('pm-regbase')">
             </div>
             <div class="col-md-4">
-                <label class="form-label fw-semibold">寄存器偏移</label>
+                <label class="form-label fw-semibold">寄存器偏移 <span class="text-danger">*</span></label>
                 <input type="number" step="1" class="form-control" id="pm-regoffset" placeholder="如 0 或 10" onblur="normRegField('pm-regoffset')">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label fw-semibold">寄存器数量 <span class="text-danger">*</span></label>
+                <input type="number" step="1" min="1" max="125" class="form-control" id="pm-regcount" placeholder="必填（1~125）">
             </div>
           </div>
 

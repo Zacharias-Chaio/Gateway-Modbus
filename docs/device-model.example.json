@@ -1,10 +1,10 @@
 {
-  "id": "a1b2c3d4-e5f6-4a7b-8c9d-0123456789ab",
+  "id": "Profile-0",
   "profileIndex": 0,
   "name": "三相电力仪表",
   "profile": {
     "profileIndex": 0,
-    "profileId": "a1b2c3d4-e5f6-4a7b-8c9d-0123456789ab",
+    "profileId": "Profile-0",
     "name": "三相电力仪表",
     "manufacturer": "安科瑞",
     "description": "ACR10R 三相多功能电力仪表，Modbus TCP 接口",
@@ -20,7 +20,7 @@
     {
       "id": "online",
       "name": "在线状态",
-      "description": "0-离线 1-在线",
+      "description": "{\"offline\":0,\"online\":1}",
       "dataType": "bool",
       "unit": "",
       "accessMode": "r",
@@ -49,6 +49,7 @@
       "writeFunctionCode": null,
       "registerBase": 4096,
       "registerOffset": 0,
+      "registerCount": 2,
       "byteOrder": "ABCD"
     },
     {
@@ -66,6 +67,7 @@
       "writeFunctionCode": null,
       "registerBase": 4096,
       "registerOffset": 2,
+      "registerCount": 2,
       "byteOrder": "ABCD"
     },
     {
@@ -83,6 +85,7 @@
       "writeFunctionCode": null,
       "registerBase": 4096,
       "registerOffset": 4,
+      "registerCount": 2,
       "byteOrder": "ABCD"
     },
     {
@@ -100,6 +103,7 @@
       "writeFunctionCode": null,
       "registerBase": 4112,
       "registerOffset": 0,
+      "registerCount": 2,
       "byteOrder": "ABCD"
     },
     {
@@ -117,6 +121,7 @@
       "writeFunctionCode": null,
       "registerBase": 4144,
       "registerOffset": 0,
+      "registerCount": 2,
       "byteOrder": "ABCD"
     },
     {
@@ -134,6 +139,7 @@
       "writeFunctionCode": null,
       "registerBase": 8192,
       "registerOffset": 0,
+      "registerCount": 2,
       "byteOrder": "ABCD"
     },
     {
@@ -151,6 +157,7 @@
       "writeFunctionCode": null,
       "registerBase": 4096,
       "registerOffset": 0,
+      "registerCount": 1,
       "byteOrder": "AB"
     }
   ]

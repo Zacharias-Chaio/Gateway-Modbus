@@ -71,6 +71,15 @@ const IFACE_LABEL = { Serial:'串口', Network:'网络' };
 function ifaceLabel(v) { return IFACE_LABEL[v] || v || '—'; }
 function emptyProfile() { return { profileIndex:null, profileId:'', name:'', manufacturer:'', description:'', deviceType:'', deviceModel:'', ratedPower:null, interfaceType:'', protocolType:'', protocolVersion:'', maxRegisterCount: 100 }; }
 function nextProfileIndex() { let n = 0; while (state.models.some(m => m.profile && String(m.profile.profileIndex) === String(n))) n++; return n; }
+// 属性ID 规则：Property-[属性索引]，自动生成、不可修改。
+// 索引 0 由默认在线属性（online，保持原有规则）占用，新属性从 1 起取最小未占用值。
+function nextPropIndex() { let n = 1; while (state.properties.some(p => p.id === 'Property-' + n)) n++; return n; }
+// 寄存器地址 = 基址 + 偏移，十进制/十六进制双显（如 10/000AH）
+function regAddrDisplay(p) {
+  if (p.registerBase == null || p.registerOffset == null) return '—';
+  const addr = p.registerBase + p.registerOffset;
+  return `${addr}/${addr.toString(16).toUpperCase().padStart(4, '0')}H`;
+}
 function loadModelIntoBuffer(m) {
   state.profile = deepCopy(m.profile);
   state.properties = deepCopy(m.properties);
@@ -84,14 +93,15 @@ function saveBufferIntoModel() {
 }
 function newModel() {
   const prof = emptyProfile();
-  const modelId = crypto.randomUUID();
-  prof.profileId = modelId;
   prof.profileIndex = nextProfileIndex();
+  // 档案ID 规则：Profile-[档案索引号]，自动生成，不可修改
+  const modelId = 'Profile-' + prof.profileIndex;
+  prof.profileId = modelId;
   const m = {
     id: modelId,
     profile: prof,
     properties: [
-      { id:'online', name:'在线状态', description:'0-离线 1-在线', dataType:'bool', unit:'', accessMode:'r', startBit:0, endBit:0, deltaValue:0, coefficient:1, readFunctionCode:null, writeFunctionCode:null, registerBase:null, registerOffset:null, byteOrder:'' }
+      { id:'online', name:'在线状态', description:'{"offline":0,"online":1}', dataType:'bool', unit:'', accessMode:'r', startBit:0, endBit:0, deltaValue:0, coefficient:1, readFunctionCode:null, writeFunctionCode:null, registerBase:null, registerOffset:null, byteOrder:'' }
     ]
   };
   state.models.push(m);
@@ -200,17 +210,20 @@ function openPropModal(idx = -1) {
   propEditIndex = idx;
   const form = document.getElementById('form-prop');
   form.classList.remove('was-validated');
+  const propIdx = idx >= 0 ? idx : nextPropIndex();
   const p = idx >= 0 ? state.properties[idx]
-    : { id:'', name:'', description:'', dataType:'', unit:'', accessMode:'', startBit:0, endBit:0, deltaValue:0, coefficient:1, readFunctionCode:null, writeFunctionCode:null, registerBase:null, registerOffset:null, byteOrder:'' };
-  setVal('pm-index', idx >= 0 ? idx : state.properties.length);
+    : { id: 'Property-' + propIdx, name:'', description:'', dataType:'', unit:'', accessMode:'', startBit:0, endBit:0, deltaValue:0, coefficient:1, readFunctionCode:null, writeFunctionCode:null, registerBase:null, registerOffset:null, registerCount:1, byteOrder:'' };
+  setVal('pm-index', propIdx);
   setVal('pm-id', p.id); setVal('pm-name', p.name); setVal('pm-desc', p.description);
   setVal('pm-dataType', p.dataType); setVal('pm-unit', p.unit); setVal('pm-access', p.accessMode);
   setVal('pm-startbit', p.startBit ?? 0);
   setVal('pm-endbit', p.endBit ?? 0);
-  setVal('pm-base', p.deltaValue ?? (p.base ?? 0)); setVal('pm-coef', p.coefficient);
+  setVal('pm-base', p.deltaValue ?? 0); setVal('pm-coef', p.coefficient);
   setVal('pm-readfunc', p.readFunctionCode ?? ''); setVal('pm-writefunc', p.writeFunctionCode ?? '');
-  setVal('pm-regbase', p.registerBase != null ? p.registerBase : ''); setVal('pm-regoffset', p.registerOffset != null ? p.registerOffset : ''); setVal('pm-byteorder', p.byteOrder);
-  document.getElementById('pm-id').readOnly = isLocked(idx);
+  setVal('pm-regbase', p.registerBase != null ? p.registerBase : ''); setVal('pm-regoffset', p.registerOffset != null ? p.registerOffset : '');
+  setVal('pm-regcount', p.registerCount != null ? p.registerCount : ''); setVal('pm-byteorder', p.byteOrder);
+  // 属性ID 自动生成（在线点保持 online），一律不可修改
+  document.getElementById('pm-id').readOnly = true;
   document.getElementById('propModalTitle').textContent = idx >= 0 ? '编辑属性' : '添加属性';
   propModal.show();
 }
@@ -219,26 +232,45 @@ function saveProp() {
   form.classList.add('was-validated');
   if (!form.checkValidity()) return;
   const id = val('pm-id');
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(id)) { alert('属性ID 格式非法，需以字母或下划线开头'); return; }
+  if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(id)) { alert('属性ID 格式非法（自动生成，无需填写）'); return; }
   const dup = state.properties.findIndex(p => p.id === id);
   if (dup >= 0 && dup !== propEditIndex) { alert('属性ID 已存在：' + id); return; }
   const dataType = val('pm-dataType');
   const startBit = toNum(val('pm-startbit'), 0);
   const endBit = toNum(val('pm-endbit'), 0);
   if (endBit < startBit) { alert('终止位不能小于起始位'); return; }
-  // 校验：位区间不能超过寄存器数×16
-  const regCount = Math.floor(endBit / 16) + 1; // 终止位决定的寄存器数
-  if (endBit - startBit >= regCount * 16) { alert(`位区间超出寄存器宽度：起始位 ${startBit}、终止位 ${endBit}，占用 ${regCount} 个寄存器（${regCount * 16} 位），位区间需小于 ${regCount * 16}`); return; }
+  const accessMode = val('pm-access');
+  const readFC = toNum(val('pm-readfunc'), null);
+  const writeFC = toNum(val('pm-writefunc'), null);
+  const registerBase = toNum(parseRegAddr(val('pm-regbase')), null);
+  const registerOffset = toNum(parseRegAddr(val('pm-regoffset')), null);
+  // 协议映射为必选配置；在线点（online）为虚拟属性、不映射寄存器，豁免校验。
+  if (!isLocked(propEditIndex)) {
+    if ((accessMode === 'r' || accessMode === 'rw') && readFC === null) { alert('协议映射必选：可读属性必须选择读功能码'); return; }
+    if ((accessMode === 'w' || accessMode === 'rw') && writeFC === null) { alert('协议映射必选：可写属性必须选择写功能码'); return; }
+    if (registerBase === null) { alert('协议映射必选：寄存器基址必填'); return; }
+    if (registerOffset === null) { alert('协议映射必选：寄存器偏移必填（可为 0）'); return; }
+  }
+  // 设计约定：寄存器数量与位区间（数据长度）无强制对应关系——
+  //   寄存器数量 → 读取跨度（从设备读多少个寄存器）；
+  //   位区间 → 解析规则（读回数据中取多少位换算工程值，如 1 寄存器 16 位只取前 8 位）。
+  // 仅要求位区间落在实际读取的数据宽度内。
+  const regCount = toNum(val('pm-regcount'), null);
+  if (!isLocked(propEditIndex) && regCount === null) { alert('协议映射必选：寄存器数量必填（1~125）'); return; }
+  if (regCount !== null && (!Number.isInteger(regCount) || regCount < 1 || regCount > 125)) { alert('寄存器数量需为 1~125 的整数'); return; }
+  const dataWidth = (regCount !== null ? regCount : Math.floor(endBit / 16) + 1) * 16; // 可读取的数据位数
+  if (endBit >= dataWidth) { alert(`终止位 ${endBit} 超出可读取的数据宽度：当前配置可读 ${dataWidth} 位，请增大寄存器数量或缩小位区间`); return; }
   const p = {
     id, name: val('pm-name'), description: val('pm-desc'), dataType, unit: val('pm-unit'),
-    accessMode: val('pm-access'),
+    accessMode,
     startBit, endBit,
     deltaValue: toNum(val('pm-base'), 0),
     coefficient: toNum(val('pm-coef'), 1),
-    readFunctionCode: toNum(val('pm-readfunc'), null),
-    writeFunctionCode: toNum(val('pm-writefunc'), null),
-    registerBase: toNum(parseRegAddr(val('pm-regbase')), null),
-    registerOffset: toNum(parseRegAddr(val('pm-regoffset')), null),
+    readFunctionCode: readFC,
+    writeFunctionCode: writeFC,
+    registerBase,
+    registerOffset,
+    registerCount: regCount,
     byteOrder: val('pm-byteorder')
   };
   if (propEditIndex >= 0) state.properties[propEditIndex] = p; else state.properties.push(p);
@@ -264,10 +296,11 @@ function renderProps() {
       <td><code>${escapeHtml(p.id)}</code></td>
       <td>${escapeHtml(p.name)}</td>
       <td>${escapeHtml(dataTypeLabel(p.dataType))}</td>
-      <td>${escapeHtml(String(p.deltaValue ?? p.base ?? 0))}</td>
+      <td>${escapeHtml(String(p.deltaValue ?? 0))}</td>
       <td>${escapeHtml(String(p.coefficient ?? '1'))}</td>
       <td>${escapeHtml(p.unit || '—')}</td>
       <td><span class="badge badge-${escapeHtml(p.accessMode)}">${escapeHtml((p.accessMode || '').toUpperCase())}</span></td>
+      <td>${escapeHtml(regAddrDisplay(p))}</td>
       <td>${escapeHtml(bitRange)}</td>
       <td class="text-nowrap">
         ${isLocked(i) ? '<span class="text-muted" title="默认属性不可删除"><i class="bi bi-lock"></i></span>' : `<button class="btn btn-sm btn-link p-0 me-2" onclick="openPropModal(${i})" title="编辑"><i class="bi bi-pencil"></i></button>
@@ -284,7 +317,7 @@ function exportPropsCsv() {
   const lines = [CSV_HEADERS.map(csvCell).join(',')];
   state.properties.forEach(p => {
     lines.push([p.id, p.name, p.description, DT_LABEL[p.dataType] || p.dataType, p.startBit ?? '', p.endBit ?? '', ACCESS_LABEL[p.accessMode] || p.accessMode,
-      p.deltaValue ?? p.base ?? 0, p.coefficient, p.unit, p.readFunctionCode ?? '', p.writeFunctionCode ?? '', p.registerBase ?? '', p.registerOffset ?? '', p.byteOrder
+      p.deltaValue ?? 0, p.coefficient, p.unit, p.readFunctionCode ?? '', p.writeFunctionCode ?? '', p.registerBase ?? '', p.registerOffset ?? '', p.registerCount ?? '', p.byteOrder
     ].map(csvCell).join(','));
   });
   downloadBlob(new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), sanitize(state.profile.name) + '-properties.csv');
@@ -326,7 +359,7 @@ function importPropsCsv(input) {
         const get = f => (f in fieldIdx) ? (row[fieldIdx[f]] ?? '').trim() : '';
         const id = get('id');
         if (!id) throw new Error(`第 ${r + 1} 行：属性ID 不能为空`);
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(id)) throw new Error(`第 ${r + 1} 行：属性ID 格式非法（${id}）`);
+        if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(id)) throw new Error(`第 ${r + 1} 行：属性ID 格式非法（${id}）`);
         if (seen.has(id)) throw new Error('CSV 中存在重复属性ID：' + id);
         seen.add(id);
         const dtRaw = get('dataType');
@@ -335,12 +368,25 @@ function importPropsCsv(input) {
         const accRaw = get('accessMode');
         const acc = ACCESS_FROM_LABEL[accRaw] || accRaw;
         if (!ACCESS_LABEL[acc]) throw new Error(`第 ${r + 1} 行：读写属性非法（${accRaw}）`);
+        // 协议映射为必选配置；虚拟属性 online 豁免
+        if (id !== 'online') {
+          const rfc = toNum(get('readFunctionCode'), null);
+          const wfc = toNum(get('writeFunctionCode'), null);
+          const rb = toNum(get('registerBase'), null);
+          const ro = toNum(get('registerOffset'), null);
+          const rc = toNum(get('registerCount'), null);
+          if ((acc === 'r' || acc === 'rw') && rfc === null) throw new Error(`第 ${r + 1} 行：读功能码必填`);
+          if ((acc === 'w' || acc === 'rw') && wfc === null) throw new Error(`第 ${r + 1} 行：写功能码必填`);
+          if (rb === null) throw new Error(`第 ${r + 1} 行：寄存器基址必填`);
+          if (ro === null) throw new Error(`第 ${r + 1} 行：寄存器偏移必填（可为 0）`);
+          if (rc === null || !Number.isInteger(rc) || rc < 1 || rc > 125) throw new Error(`第 ${r + 1} 行：寄存器数量必填（1~125）`);
+        }
         imported.push({
           id, name: get('name'), description: get('description'), dataType: dt, unit: get('unit'), accessMode: acc,
           startBit: toNum(get('startBit'), 0), endBit: toNum(get('endBit'), 0),
           deltaValue: toNum(get('deltaValue'), 0), coefficient: toNum(get('coefficient'), 1),
           readFunctionCode: toNum(get('readFunctionCode'), null), writeFunctionCode: toNum(get('writeFunctionCode'), null),
-          registerBase: toNum(get('registerBase'), null), registerOffset: toNum(get('registerOffset'), null),
+          registerBase: toNum(get('registerBase'), null), registerOffset: toNum(get('registerOffset'), null), registerCount: toNum(get('registerCount'), null),
           byteOrder: get('byteOrder')
         });
       }
@@ -393,6 +439,7 @@ function buildCollectorConfig() {
       writeFunctionCode: p.writeFunctionCode,
       registerBase: p.registerBase,
       registerOffset: p.registerOffset,
+      registerCount: p.registerCount ?? null,
       byteOrder: p.byteOrder || ''
     }))
   };

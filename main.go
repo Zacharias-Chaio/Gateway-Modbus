@@ -31,12 +31,6 @@ func main() {
 		logger.Error("打开数据库失败", "err", err)
 		os.Exit(1)
 	}
-	// 业务收窄迁移：物理删除历史 CAN 链路（采集只保留 Modbus 串口 / 网络）。
-	if removed, delErr := store.DeleteUnsupportedChannels(db); delErr != nil {
-		logger.Warn("清理不再支持的 CAN 链路失败", "err", delErr)
-	} else if removed > 0 {
-		logger.Info("已删除不再支持的 CAN 链路记录", "count", removed)
-	}
 	// 监听中断/终止信号；每次软件重启均在该进程上下文中重建运行资源。
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

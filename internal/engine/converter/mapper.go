@@ -32,11 +32,10 @@ var ErrInsufficientBytes = errors.New("寄存器数据字节不足")
 //   - raw:       响应中对应属性的裸字节（已按 ByteOffset 切片好）
 //   - prop:      属性元数据（含 dataType / startBit / endBit / byteOrder / coefficient / deltaValue）
 //
-// 位提取规则：startBit/endBit 定义在 regCount × 16 位宽度内的位区间（bit 0 = 最低位）。
+// 位提取规则：startBit/endBit 定义在 registerCount × 16 位宽度内的位区间（bit 0 = 最低位）。
 // string 类型不走位提取，按字节级处理。
 func MapRegisters(raw []byte, prop PropMeta) (any, error) {
-	regCount := prop.RegCount()
-	need := regCount * 2
+	need := prop.RegisterCount * 2
 	if len(raw) < need {
 		return nil, ErrInsufficientBytes
 	}
@@ -99,11 +98,8 @@ func extractBit(raw []byte, bit int) bool {
 }
 
 // extractBits 从整数值中提取 [startBit, endBit] 位段（含两端，bit 0 = 最低位）。
-// 当 startBit=0 且 endBit<0 时返回原始值（不做位提取，向后兼容）。
+// startBit / endBit 越界时收敛为单点，保证位宽掩码始终有效。
 func extractBits(v int64, startBit, endBit int) int64 {
-	if endBit < 0 {
-		return v
-	}
 	if startBit < 0 {
 		startBit = 0
 	}

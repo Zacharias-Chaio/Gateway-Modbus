@@ -63,7 +63,7 @@ func (e envelope) toMsg(subject string) *nats.Msg {
 type messageData struct {
 	GatewayID    string             `json:"gateway_id"`
 	GatewaySN    string             `json:"gateway_sn"`
-	ChannelIndex int                `json:"channel_index"`
+	ChannelIndex int                `json:"channel_index"` // 通道索引，从 0 开始（与通道ID Channel-{索引} 对应）
 	DeviceIndex  int                `json:"device_index"`
 	DeviceName   string             `json:"device_name"`
 	CommNo       int                `json:"comm_no"`
@@ -82,7 +82,7 @@ type propVal struct {
 }
 
 type messageCmd struct {
-	ChannelIndex int     `json:"channel_index"`
+	ChannelIndex int     `json:"channel_index"` // 通道索引，从 0 开始
 	DeviceIndex  int     `json:"device_index"`
 	Name         string  `json:"name"`
 	Value        float64 `json:"value"`
@@ -107,12 +107,14 @@ type messageQueryResp struct {
 	Channels []channelInfo `json:"channels"`
 }
 
+// ChannelInfo 通道信息（对齐 store.Channel + 运行状态）。
 type channelInfo struct {
-	ID        int          `json:"id"`
-	Name      string       `json:"name"`
-	Type      string       `json:"type"`
-	Connected bool         `json:"connected"`
-	Devices   []deviceInfo `json:"devices"`
+	ID           string       `json:"id"`           // 通道ID，格式 Channel-{通道索引}
+	ChannelIndex int          `json:"channel_index"` // 通道索引（与 data/cmd 消息路由字段一致，从 0 开始）
+	Name         string       `json:"name"`
+	Type         string       `json:"type"`
+	Connected    bool         `json:"connected"` // 引擎在线状态
+	Devices      []deviceInfo `json:"devices"`   // 挂载设备列表
 }
 
 type deviceInfo struct {

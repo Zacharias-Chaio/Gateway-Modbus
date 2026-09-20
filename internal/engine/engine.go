@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
+	"hash"
 	"log/slog"
 	"math"
 	"sort"
@@ -22,7 +24,7 @@ type Engine struct {
 
 	mu      sync.Mutex
 	applyMu sync.Mutex      // 串行化调谐，避免新旧 worker 在重启期间重叠运行
-	workers map[int]*worker // key: channel ID
+	workers map[int]*worker // key: 通道索引（从 0 开始）
 	sink    EventSink
 }
 
@@ -58,7 +60,7 @@ func (e *Engine) Apply(plans []ChannelPlan) {
 
 	desired := make(map[int]ChannelPlan, len(plans))
 	for _, p := range plans {
-		desired[p.ChannelID] = p
+		desired[p.ChannelIndex] = p
 	}
 
 	e.mu.Lock()
@@ -66,18 +68,18 @@ func (e *Engine) Apply(plans []ChannelPlan) {
 
 	// 从活动表移除不再期望存在、或配置已变化的 worker。等待退出必须在锁外，
 	// 以免阻塞状态查询与写命令投递。
-	for id, w := range e.workers {
-		p, keep := desired[id]
+	for index, w := range e.workers {
+		p, keep := desired[index]
 		if !keep {
-			e.log.Info("停止链路（已删除）", "channel", w.name, "id", id)
+			e.log.Info("停止链路（已删除）", "channel", w.name, "index", index)
 			toStop = append(toStop, w)
-			delete(e.workers, id)
+			delete(e.workers, index)
 			continue
 		}
 		if planFingerprint(p) != w.fp {
-			e.log.Info("重启链路（配置变更）", "channel", w.name, "id", id)
+			e.log.Info("重启链路（配置变更）", "channel", w.name, "index", index)
 			toStop = append(toStop, w)
-			delete(e.workers, id)
+			delete(e.workers, index)
 		}
 	}
 	e.mu.Unlock()
@@ -89,8 +91,8 @@ func (e *Engine) Apply(plans []ChannelPlan) {
 	// 启动新增的、或刚因变更被移除的 worker。
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for id, p := range desired {
-		if _, running := e.workers[id]; running {
+	for index, p := range desired {
+		if _, running := e.workers[index]; running {
 			continue
 		}
 		e.startChannel(p)
@@ -101,26 +103,26 @@ func (e *Engine) Apply(plans []ChannelPlan) {
 func (e *Engine) startChannel(p ChannelPlan) {
 	cfg, err := connector.ParseConfig(p.ChannelType, p.Config)
 	if err != nil {
-		e.log.Warn("链路配置解析失败，跳过", "channel", p.ChannelName, "id", p.ChannelID, "err", err)
+		e.log.Warn("链路配置解析失败，跳过", "channel", p.ChannelName, "index", p.ChannelIndex, "err", err)
 		return
 	}
 	drv, err := connector.NewDriver(cfg)
 	if err != nil {
-		e.log.Warn("链路驱动创建失败，跳过", "channel", p.ChannelName, "id", p.ChannelID, "type", p.ChannelType, "err", err)
+		e.log.Warn("链路驱动创建失败，跳过", "channel", p.ChannelName, "index", p.ChannelIndex, "type", p.ChannelType, "err", err)
 		return
 	}
-	w := newWorker(p.ChannelID, p.ChannelName, planFingerprint(p), cfg, drv, p, e.sink)
+	w := newWorker(p.ChannelIndex, p.ChannelName, planFingerprint(p), cfg, drv, p, e.sink)
 	w.start(e.ctx)
-	e.workers[p.ChannelID] = w
-	e.log.Info("启动链路", "channel", p.ChannelName, "id", p.ChannelID, "type", p.ChannelType,
+	e.workers[p.ChannelIndex] = w
+	e.log.Info("启动链路", "channel", p.ChannelName, "index", p.ChannelIndex, "id", fmt.Sprintf("Channel-%d", p.ChannelIndex), "type", p.ChannelType,
 		"target", cfg.Target(), "devices", len(p.Devices))
 }
 
 // Submit 向指定链路投递一条写命令（非阻塞）。
-// channelID 不存在或队列已满时返回 false。
-func (e *Engine) Submit(channelID int, cmd WriteCommand) bool {
+// 通道索引不存在或队列已满时返回 false。
+func (e *Engine) Submit(channelIndex int, cmd WriteCommand) bool {
 	e.mu.Lock()
-	w, ok := e.workers[channelID]
+	w, ok := e.workers[channelIndex]
 	e.mu.Unlock()
 	if !ok {
 		return false
@@ -129,17 +131,17 @@ func (e *Engine) Submit(channelID int, cmd WriteCommand) bool {
 }
 
 // HasDevice reports whether an active channel has the requested mounted device.
-func (e *Engine) HasDevice(channelID, deviceIndex int) bool {
+func (e *Engine) HasDevice(channelIndex, deviceIndex int) bool {
 	e.mu.Lock()
-	w, ok := e.workers[channelID]
+	w, ok := e.workers[channelIndex]
 	e.mu.Unlock()
 	return ok && deviceIndex >= 0 && deviceIndex < len(w.plan.Devices)
 }
 
 // Connected reports whether an active channel is currently connected.
-func (e *Engine) Connected(channelID int) bool {
+func (e *Engine) Connected(channelIndex int) bool {
 	e.mu.Lock()
-	w, ok := e.workers[channelID]
+	w, ok := e.workers[channelIndex]
 	e.mu.Unlock()
 	return ok && w.state().Connected
 }
@@ -151,10 +153,10 @@ type SessionEntry struct {
 }
 
 // Values 返回指定链路的所有缓存实时值快照。
-// 不存在返回 nil。
-func (e *Engine) Values(channelID int) map[string]SessionEntry {
+// 通道索引不存在返回 nil。
+func (e *Engine) Values(channelIndex int) map[string]SessionEntry {
 	e.mu.Lock()
-	w, ok := e.workers[channelID]
+	w, ok := e.workers[channelIndex]
 	e.mu.Unlock()
 	if !ok {
 		return nil
@@ -165,9 +167,9 @@ func (e *Engine) Values(channelID int) map[string]SessionEntry {
 // CommunicationSnapshot returns the current communication-monitor session for
 // a device, or for every device when deviceIndex is -1. The boolean is false
 // when the channel has no active worker.
-func (e *Engine) CommunicationSnapshot(channelID, deviceIndex int, afterSeq uint64, limit int) (CommunicationSnapshot, bool) {
+func (e *Engine) CommunicationSnapshot(channelIndex, deviceIndex int, afterSeq uint64, limit int) (CommunicationSnapshot, bool) {
 	e.mu.Lock()
-	w, ok := e.workers[channelID]
+	w, ok := e.workers[channelIndex]
 	e.mu.Unlock()
 	if !ok {
 		return CommunicationSnapshot{}, false
@@ -193,7 +195,7 @@ func (e *Engine) Stop() {
 	e.log.Info("引擎已停止，所有链路关闭")
 }
 
-// Status 返回全部链路的运行状态快照，按链路 ID 升序。
+// Status 返回全部链路的运行状态快照，按通道索引升序。
 func (e *Engine) Status() []workerState {
 	e.mu.Lock()
 	out := make([]workerState, 0, len(e.workers))
@@ -201,7 +203,7 @@ func (e *Engine) Status() []workerState {
 		out = append(out, w.state())
 	}
 	e.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool { return out[i].ChannelIndex < out[j].ChannelIndex })
 	return out
 }
 
@@ -238,8 +240,7 @@ func planFingerprint(p ChannelPlan) string {
 		}
 		h.Write([]byte{0xFF})
 
-		// 属性元数据指纹：只哈希影响采集/写操作结果的字段，排除 Legacy 兼容字段，
-		// 避免 LegacyBase/LegacyDataLength 转换后指纹抖动导致不必要的 worker 重启。
+		// 属性元数据指纹：只哈希影响采集/写操作结果的字段。
 		for _, prop := range dev.Props {
 			h.Write([]byte(prop.Name))
 			h.Write([]byte{0})
@@ -263,20 +264,15 @@ func planFingerprint(p ChannelPlan) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func writeUint16(h hasher, v int) {
+func writeUint16(h hash.Hash, v int) {
 	h.Write([]byte{byte(v >> 8), byte(v)})
 }
 
 // int64Bits 将 float64 的 IEEE 754 二进制表示写入指纹哈希，
 // 保证浮点值的精确匹配（避免字符串格式化的精度丢失）。
-func int64Bits(f float64, h hasher) {
+func int64Bits(f float64, h hash.Hash) {
 	bits := math.Float64bits(f)
 	for i := 7; i >= 0; i-- {
 		h.Write([]byte{byte(bits >> (i * 8))})
 	}
-}
-
-// hasher 是 sha1.hash 实现的最小写入接口，便于测试桩接。
-type hasher interface {
-	Write([]byte) (int, error)
 }

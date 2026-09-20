@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"gateway/internal/engine"
 )
 
 // Realtime 返回设备属性的实时采集值。
-// 查询参数 device 格式为 "channelID/deviceIndex"（如 "1/0"），返回该链路设备下的所有缓存属性。
+// 查询参数 device 格式为 "channelIndex/deviceIndex"（如 "0/1"，通道索引从 0 开始），
+// 返回该链路设备下的所有缓存属性。
 func (s *Server) Realtime(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
 	if device == "" {
@@ -21,9 +23,9 @@ func (s *Server) Realtime(w http.ResponseWriter, r *http.Request) {
 
 	// 尝试从引擎获取实时缓存值
 	if s.Engine != nil {
-		channelID, devIdx := parseDeviceKey(device)
-		if channelID >= 0 {
-			all := s.Engine.Values(channelID)
+		channelIndex, devIdx := parseDeviceKey(device)
+		if channelIndex >= 0 {
+			all := s.Engine.Values(channelIndex)
 			values := make(map[string]any)
 			prefix := fmt.Sprintf("%d/", devIdx)
 			for k, v := range all {
@@ -54,20 +56,21 @@ func (s *Server) Realtime(w http.ResponseWriter, r *http.Request) {
 }
 
 // SetValue 接收对可写属性的设定值，通过引擎下发写命令。
-// 请求体 JSON: { "channelId": 1, "deviceIndex": 0, "propName": "频率", "value": 50.0 }
+// 请求体 JSON: { "channelIndex": 0, "deviceIndex": 0, "propName": "频率", "value": 50.0 }
+// 通道索引从 0 开始，用指针区分「未提供」与合法的 0。
 func (s *Server) SetValue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ChannelID   int     `json:"channelId"`
-		DeviceIndex int     `json:"deviceIndex"`
-		PropName    string  `json:"propName"`
-		Value       float64 `json:"value"`
+		ChannelIndex *int    `json:"channelIndex"`
+		DeviceIndex  int     `json:"deviceIndex"`
+		PropName     string  `json:"propName"`
+		Value        float64 `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		fail(w, http.StatusBadRequest, "JSON 解析失败: "+err.Error())
 		return
 	}
-	if req.ChannelID <= 0 || req.PropName == "" {
-		fail(w, http.StatusBadRequest, "缺少 channelId 或 propName")
+	if req.ChannelIndex == nil || *req.ChannelIndex < 0 || req.PropName == "" {
+		fail(w, http.StatusBadRequest, "缺少 channelIndex 或 propName")
 		return
 	}
 
@@ -81,31 +84,27 @@ func (s *Server) SetValue(w http.ResponseWriter, r *http.Request) {
 		PropName:    req.PropName,
 		RawValue:    req.Value,
 	}
-	if !s.Engine.Submit(req.ChannelID, cmd) {
+	if !s.Engine.Submit(*req.ChannelIndex, cmd) {
 		fail(w, http.StatusServiceUnavailable, "写命令投递失败：链路不存在或队列已满")
 		return
 	}
 	ok(w, map[string]string{"status": "accepted"})
 }
 
-// Logs 返回通讯日志（当前从 logx 系统日志出口获取，API 层做格式封装）。
-func (s *Server) Logs(w http.ResponseWriter, r *http.Request) {
-	// 通讯日志已由 logx 统一管理，此处返回基本状态。
-	ok(w, map[string]any{
-		"timestamp": time.Now().Unix(),
-		"note":      "通讯日志请查看 /api/syslog 实时流",
-	})
-}
-
-// parseDeviceKey 解析 "channelID/deviceIndex" 格式。
-func parseDeviceKey(s string) (channelID, devIdx int) {
-	for i, c := range s {
-		if c == '/' {
-			id, _ := strconv.Atoi(s[:i])
-			idx, _ := strconv.Atoi(s[i+1:])
-			return id, idx
-		}
+// parseDeviceKey 解析 "channelIndex/deviceIndex" 格式。
+// 通道索引与设备序号均从 0 开始；解析失败或为负时返回 -1。
+func parseDeviceKey(s string) (channelIndex, devIdx int) {
+	channel, device, hasDevice := strings.Cut(s, "/")
+	idx, err := strconv.Atoi(channel)
+	if err != nil || idx < 0 {
+		return -1, 0
 	}
-	id, _ := strconv.Atoi(s)
-	return id, 0
+	if !hasDevice {
+		return idx, 0
+	}
+	d, err := strconv.Atoi(device)
+	if err != nil || d < 0 {
+		return -1, 0
+	}
+	return idx, d
 }

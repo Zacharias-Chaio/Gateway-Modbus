@@ -67,7 +67,7 @@ powerpulse.gateway.gw-001.query
 
 - **网关侧固定三个主题**，启动时按 `subjectPrefix` 与 `gw_id` 生成 data、cmd、query 三个 subject；
 - **多网关隔离**通过 `gw_id` 实现，A 网关收不到 B 网关的命令；
-- **订阅方自过滤**：消费端收到 `.data` 后，按消息体中的 `channel.id`、`device.index` 自行路由；
+- **订阅方自过滤**：消费端收到 `.data` 后，按消息体中的 `channel_index`、`device_index` 自行路由；
 - **控制响应复用 `.data`**，信封中 `type: "cmdAck"` 标识，不新增主题。
 - **查询接口（拓扑发现）**：网关订阅 `.query`，收到 `type: "queryTopology"` 请求后，返回本网关的通道列表及各通道挂载的设备列表（详见 3.2.4）。不提供设备属性工程值查询，实时遥测一律走 `.data` 订阅。
 - 本阶段仅使用 **Core NATS**；不引入 JetStream stream、发布确认、持久化或重放语义。
@@ -173,13 +173,13 @@ func (e *Envelope) FromNatsMsg(msg *nats.Msg) (*Envelope, error) {
 type MessageData struct {
   GatewayID    string             `json:"gateway_id"`    // 网关 ID
   GatewaySN    string             `json:"gateway_sn"`    // 网关硬件序列号
-  ChannelIndex int                `json:"channel_index"` // 通道 ID（store.Channel.ID）
-    DeviceIndex  int                `json:"device_index"`  // 设备在通道挂载列表中的序号
+  ChannelIndex int                `json:"channel_index"` // 通道索引，从 0 开始（对应通道ID Channel-{索引}）
+  DeviceIndex  int                `json:"device_index"`  // 设备在通道挂载列表中的序号
   DeviceName   string             `json:"device_name"`   // 用户填写的设备名称
   CommNo       int                `json:"comm_no"`       // 设备通讯号（Modbus Unit ID）
   ModelID      string             `json:"model_id"`      // 设备模型 ID
   ModelName    string             `json:"model_name"`    // 设备模型名称
-    Properties   map[string]PropVal `json:"properties"`    // 属性 ID → 属性值
+  Properties   map[string]PropVal `json:"properties"`    // 属性 ID → 属性值
 }
 
 // PropVal 单个属性值，对齐 engine.SessionEntry。
@@ -211,7 +211,7 @@ type PropVal struct {
 ```golang
 // MessageCmd 单条写命令请求（请求体）。
 type MessageCmd struct {
-  ChannelIndex int     `json:"channel_index"` // 通道 ID
+  ChannelIndex int     `json:"channel_index"` // 通道索引，从 0 开始（0 为合法值）
   DeviceIndex  int     `json:"device_index"`  // 设备序号
   Name         string  `json:"name"`          // 属性名称
   Value        float64 `json:"value"`         // 工程值（与 engine.WriteCommand.RawValue 对齐）
@@ -220,7 +220,7 @@ type MessageCmd struct {
 // MessageAck 写命令应答（响应体，REQ/REP 的 reply 或异步 cmdAck）。
 type MessageAck struct {
   RequestID    string `json:"request_id"`              // 原请求 PP-Message-ID
-  ChannelIndex int    `json:"channel_index"`           // 通道 ID
+  ChannelIndex int    `json:"channel_index"`           // 通道索引
   DeviceIndex  int    `json:"device_index"`            // 设备序号
   Status       string `json:"status"`                  // accepted / failure / success
   Message      string `json:"message,omitempty"`       // 失败原因或补充说明
@@ -258,11 +258,12 @@ type MessageQueryResp struct {
 
 // ChannelInfo 通道信息（对齐 store.Channel + 运行状态）。
 type ChannelInfo struct {
-    ID        int          `json:"id"`
-    Name      string       `json:"name"`
-    Type      string       `json:"type"` // Serial/Network
-    Connected bool         `json:"connected"` // 引擎在线状态
-    Devices   []DeviceInfo `json:"devices"`   // 挂载设备列表
+    ID           string       `json:"id"`            // 通道ID，格式 Channel-{通道索引}
+    ChannelIndex int          `json:"channel_index"` // 通道索引（与 data/cmd 消息路由字段一致，从 0 开始）
+    Name         string       `json:"name"`
+    Type         string       `json:"type"` // Serial/Network
+    Connected    bool         `json:"connected"` // 引擎在线状态
+    Devices      []DeviceInfo `json:"devices"`   // 挂载设备列表
 }
 
 // DeviceInfo 挂载设备信息：标识 + 数据点表。

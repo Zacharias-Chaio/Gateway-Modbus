@@ -54,12 +54,12 @@ func (d *DevicePlan) DisplayName() string {
 
 // ChannelPlan 是一条链路的完整采集计划。
 type ChannelPlan struct {
-	ChannelID   int    // 链路 ID
-	ChannelName string // 链路名称
-	ChannelType string // 链路类型（Serial / Network）
-	Config      []byte // 链路配置 JSON（透传给 connector.ParseConfig）
-	Devices     []DevicePlan
-	PollMs      int // 轮询间隔（毫秒），0 表示默认
+	ChannelIndex int    // 通道索引（从 0 开始），worker 的定位标识
+	ChannelName  string // 链路名称
+	ChannelType  string // 链路类型（Serial / Network）
+	Config       []byte // 链路配置 JSON（透传给 connector.ParseConfig）
+	Devices      []DevicePlan
+	PollMs       int // 轮询间隔（毫秒），0 表示默认
 }
 
 // BuildPlans 将配置源提供的链路 + 设备模型转化为引擎可执行的采集计划。
@@ -97,10 +97,10 @@ func buildChannelPlan(ch ChannelSpec, modelMap map[string]ModelSpec) (*ChannelPl
 	}
 
 	plan := &ChannelPlan{
-		ChannelID:   ch.ID,
-		ChannelName: ch.Name,
-		ChannelType: ch.Type,
-		Config:      ch.Config,
+		ChannelIndex: ch.Index,
+		ChannelName:  ch.Name,
+		ChannelType:  ch.Type,
+		Config:       ch.Config,
 	}
 
 	// 从 Config JSON 中提取 pollInterval。
@@ -169,23 +169,19 @@ func buildDevicePlan(model ModelSpec, commNo int) (*DevicePlan, error) {
 		return nil, fmt.Errorf("模型 %q 属性列表解析失败: %w", model.Name, err)
 	}
 
-	// 补全默认值 + 向后兼容旧字段。
+	// 补全默认值并校验协议映射：
+	//   - coefficient 为 0 时按 1 处理（避免工程值变换与写值逆变换失真）；
+	//   - 寄存器数量为必填（1~125），参与协议映射（配置了读或写功能码）的属性
+	//     缺失时直接报错；虚拟属性（如"在线状态"，功能码均为 0）豁免。
 	for i := range rawProps {
 		p := &rawProps[i]
-		// 旧 JSON 的 "base" → DeltaValue
-		if p.DeltaValue == 0 && p.LegacyBase != 0 {
-			p.DeltaValue = p.LegacyBase
-		}
-		// 旧 JSON 的 "dataLength" → 推导 startBit/endBit
-		if p.EndBit <= 0 && p.LegacyDataLength != nil && *p.LegacyDataLength > 0 {
-			p.StartBit = 0
-			p.EndBit = *p.LegacyDataLength*16 - 1
-		}
-		if p.EndBit < 0 {
-			p.EndBit = 0 // 至少占 1 位 → 1 寄存器
-		}
 		if p.Coefficient == 0 {
 			p.Coefficient = 1
+		}
+		if p.ReadFC > 0 || p.WriteFC > 0 {
+			if p.RegisterCount < 1 || p.RegisterCount > 125 {
+				return nil, fmt.Errorf("模型 %q 属性 %q: 寄存器数量必填（1~125）", model.Name, p.Name)
+			}
 		}
 	}
 

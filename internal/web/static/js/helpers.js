@@ -3,7 +3,6 @@ function val(id) { return document.getElementById(id).value.trim(); }
 function setVal(id, v) { document.getElementById(id).value = (v === null || v === undefined) ? '' : v; }
 function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 function toNum(v, def) { if (v === '' || v === null || v === undefined) return def; const n = Number(v); return isNaN(n) ? def : n; }
-function toNumOrNull(v) { if (v === '' || v === null || v === undefined) return null; const n = Number(v); return isNaN(n) ? v : n; }
 function dataTypeLabel(v) { return DT_LABEL[v] || v || '—'; }
 function parseRegAddr(v) {
   if (v === '' || v === null || v === undefined) return '';

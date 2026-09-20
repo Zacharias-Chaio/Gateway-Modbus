@@ -158,7 +158,7 @@ func (c *Client) publishEvent(event any) {
 		for id, prop := range value.Properties {
 			properties[id] = propVal{Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: prop.Value, Timestamp: prop.Timestamp.UnixMilli()}
 		}
-		payload = messageData{GatewayID: c.gateway.GWID, GatewaySN: c.gateway.SN, ChannelIndex: value.ChannelID, DeviceIndex: value.DeviceIndex,
+		payload = messageData{GatewayID: c.gateway.GWID, GatewaySN: c.gateway.SN, ChannelIndex: value.ChannelIndex, DeviceIndex: value.DeviceIndex,
 			DeviceName: value.DeviceName, CommNo: value.CommNo, ModelID: value.ModelID,
 			ModelName: value.ModelName, Properties: properties}
 	case engine.WriteResultEvent:
@@ -167,7 +167,7 @@ func (c *Client) publishEvent(event any) {
 		if !value.OK {
 			status = "failure"
 		}
-		payload = messageAck{RequestID: value.RequestID, ChannelIndex: value.ChannelID,
+		payload = messageAck{RequestID: value.RequestID, ChannelIndex: value.ChannelIndex,
 			DeviceIndex: value.DeviceIndex, Status: status, Message: value.Error}
 	default:
 		return
@@ -189,7 +189,8 @@ func (c *Client) handleCommand(msg *nats.Msg) {
 		return
 	}
 	var command messageCmd
-	if err := json.Unmarshal(env.Payload, &command); err != nil || command.Name == "" || command.ChannelIndex <= 0 {
+	// 通道索引从 0 开始，0 是合法值；仅负数或缺参视为非法。
+	if err := json.Unmarshal(env.Payload, &command); err != nil || command.Name == "" || command.ChannelIndex < 0 {
 		c.respondAck(msg, messageAck{RequestID: env.ID, ChannelIndex: command.ChannelIndex, DeviceIndex: command.DeviceIndex, Status: "failure", Message: "无效控制参数"})
 		return
 	}
@@ -263,7 +264,7 @@ func (c *Client) topology() ([]channelInfo, error) {
 	for _, channel := range channels {
 		var mounts []engine.DeviceMount
 		_ = json.Unmarshal(channel.Devices, &mounts)
-		info := channelInfo{ID: channel.ID, Name: channel.Name, Type: channel.Type, Connected: c.engine.Connected(channel.ID)}
+		info := channelInfo{ID: channel.ID, ChannelIndex: channel.Index, Name: channel.Name, Type: channel.Type, Connected: c.engine.Connected(channel.Index)}
 		for _, mount := range mounts {
 			device := deviceInfo{Index: mount.Index, Name: mount.Name}
 			if model, ok := modelMap[mount.ModelID]; ok {

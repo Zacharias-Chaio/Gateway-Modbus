@@ -151,23 +151,23 @@ func (m *Manager) current() *engine.Engine {
 }
 
 // Submit delegates a command to the active engine.
-func (m *Manager) Submit(channelID int, command engine.WriteCommand) bool {
+func (m *Manager) Submit(channelIndex int, command engine.WriteCommand) bool {
 	eng := m.current()
-	return eng != nil && eng.Submit(channelID, command)
+	return eng != nil && eng.Submit(channelIndex, command)
 }
 
 // Values returns a real-time value snapshot from the active engine.
-func (m *Manager) Values(channelID int) map[string]engine.SessionEntry {
+func (m *Manager) Values(channelIndex int) map[string]engine.SessionEntry {
 	if eng := m.current(); eng != nil {
-		return eng.Values(channelID)
+		return eng.Values(channelIndex)
 	}
 	return map[string]engine.SessionEntry{}
 }
 
 // CommunicationSnapshot returns communication data from the active engine.
-func (m *Manager) CommunicationSnapshot(channelID, deviceIndex int, afterSeq uint64, limit int) (engine.CommunicationSnapshot, bool) {
+func (m *Manager) CommunicationSnapshot(channelIndex, deviceIndex int, afterSeq uint64, limit int) (engine.CommunicationSnapshot, bool) {
 	if eng := m.current(); eng != nil {
-		return eng.CommunicationSnapshot(channelID, deviceIndex, afterSeq, limit)
+		return eng.CommunicationSnapshot(channelIndex, deviceIndex, afterSeq, limit)
 	}
 	return engine.CommunicationSnapshot{}, false
 }
