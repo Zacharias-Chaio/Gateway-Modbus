@@ -61,18 +61,18 @@ type worker struct {
 // newWorker 构造 worker，此时尚未启动 goroutine。
 func newWorker(index int, name, fp string, cfg connector.Config, drv connector.Driver, plan ChannelPlan, sink EventSink) *worker {
 	return &worker{
-		index:     index,
-		name:      name,
-		fp:        fp,
-		cfg:       cfg,
-		drv:       drv,
-		plan:      plan,
-		log:       logx.Module("engine"),
-		done:      make(chan struct{}),
-		writeCh:   make(chan WriteCommand, 32),
-		data:      make(map[string]sessionEntry),
-		monitor:   newCommMonitor(index, defaultCommEventCapacity),
-		sink:      sink,
+		index:   index,
+		name:    name,
+		fp:      fp,
+		cfg:     cfg,
+		drv:     drv,
+		plan:    plan,
+		log:     logx.Module("engine"),
+		done:    make(chan struct{}),
+		writeCh: make(chan WriteCommand, 32),
+		data:    make(map[string]sessionEntry),
+		monitor: newCommMonitor(index, defaultCommEventCapacity),
+		sink:    sink,
 	}
 }
 
@@ -132,9 +132,9 @@ func (w *worker) publishTelemetry(deviceIndex int, online bool) {
 				continue
 			}
 			if value, ok := w.data[cacheKey(deviceIndex, prop.Name)]; ok {
-				properties[prop.PropID] = TelemetryProperty{Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: value.Value, Timestamp: value.Timestamp}
+				properties[prop.PropID] = TelemetryProperty{Index: prop.Index, Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: value.Value, Timestamp: value.Timestamp}
 			} else {
-				properties[prop.PropID] = TelemetryProperty{Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: nil, Timestamp: now}
+				properties[prop.PropID] = TelemetryProperty{Index: prop.Index, Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: nil, Timestamp: now}
 			}
 		}
 		w.sess.RUnlock()
@@ -158,7 +158,7 @@ func (w *worker) addOnlineTelemetry(properties map[string]TelemetryProperty, dev
 			w.log.Warn("在线状态属性缺少 ID，跳过遥测发布", "channel", w.name, "device", dev.DisplayName())
 			return
 		}
-		properties[prop.PropID] = TelemetryProperty{Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: value, Timestamp: timestamp}
+		properties[prop.PropID] = TelemetryProperty{Index: prop.Index, Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: value, Timestamp: timestamp}
 		return
 	}
 }

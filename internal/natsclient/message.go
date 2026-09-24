@@ -63,6 +63,7 @@ func (e envelope) toMsg(subject string) *nats.Msg {
 type messageData struct {
 	GatewayID    string             `json:"gateway_id"`
 	GatewaySN    string             `json:"gateway_sn"`
+	DeviceCode   string             `json:"device_code"`   // 设备唯一编码：{gateway_id}{通道索引:03d}{设备索引:03d}，如 gw_001001001
 	ChannelIndex int                `json:"channel_index"` // 通道索引，从 0 开始（与通道ID Channel-{索引} 对应）
 	DeviceIndex  int                `json:"device_index"`
 	DeviceName   string             `json:"device_name"`
@@ -72,7 +73,13 @@ type messageData struct {
 	Properties   map[string]propVal `json:"properties"`
 }
 
+// deviceCode 生成设备唯一编码：{gateway_id}{通道索引:03d}{设备索引:03d}，如 gw_001001001。
+func deviceCode(gatewayID string, channelIndex, deviceIndex int) string {
+	return fmt.Sprintf("%s%03d%03d", gatewayID, channelIndex, deviceIndex)
+}
+
 type propVal struct {
+	Index       int    `json:"index"` // 属性索引，与物模型属性列表中的序号一致
 	Name        string `json:"name"`
 	Unit        string `json:"unit"`
 	Description string `json:"description"`
@@ -109,7 +116,7 @@ type messageQueryResp struct {
 
 // ChannelInfo 通道信息（对齐 store.Channel + 运行状态）。
 type channelInfo struct {
-	ID           string       `json:"id"`           // 通道ID，格式 Channel-{通道索引}
+	ID           string       `json:"id"`            // 通道ID，格式 Channel-{通道索引}
 	ChannelIndex int          `json:"channel_index"` // 通道索引（与 data/cmd 消息路由字段一致，从 0 开始）
 	Name         string       `json:"name"`
 	Type         string       `json:"type"`

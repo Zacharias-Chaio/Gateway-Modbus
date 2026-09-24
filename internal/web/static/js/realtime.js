@@ -130,7 +130,7 @@ function renderRtTable() {
     return;
   }
   empty.classList.add('d-none'); wrap.classList.remove('d-none');
-  tb.innerHTML = m.properties.map(p => {
+  tb.innerHTML = m.properties.map((p, i) => {
     const writable = p.accessMode === 'w' || p.accessMode === 'rw';
     const setCell = writable
       ? `<div class="d-flex gap-1">
@@ -139,7 +139,7 @@ function renderRtTable() {
          </div>`
       : '<span class="text-muted">只读</span>';
     return `<tr>
-      <td><code>${escapeHtml(p.id)}</code></td><td>${escapeHtml(p.name)}</td>
+      <td class="text-muted">${i}</td><td><code>${escapeHtml(p.id)}</code></td><td>${escapeHtml(p.name)}</td>
       <td class="fw-semibold text-muted" id="rtval-${escapeHtml(p.id)}">—</td>
       <td>${escapeHtml(p.unit || '—')}</td>
       <td><span class="badge badge-${escapeHtml(p.accessMode)}">${escapeHtml((p.accessMode||'').toUpperCase())}</span></td>

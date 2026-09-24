@@ -175,6 +175,7 @@ func buildDevicePlan(model ModelSpec, commNo int) (*DevicePlan, error) {
 	//     缺失时直接报错；虚拟属性（如"在线状态"，功能码均为 0）豁免。
 	for i := range rawProps {
 		p := &rawProps[i]
+		p.Index = i // 属性索引 = 模型属性列表中的序号，与物模型保持一致
 		if p.Coefficient == 0 {
 			p.Coefficient = 1
 		}

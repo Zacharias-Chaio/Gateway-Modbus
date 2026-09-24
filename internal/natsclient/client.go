@@ -156,9 +156,11 @@ func (c *Client) publishEvent(event any) {
 		messageType = "data"
 		properties := make(map[string]propVal, len(value.Properties))
 		for id, prop := range value.Properties {
-			properties[id] = propVal{Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: prop.Value, Timestamp: prop.Timestamp.UnixMilli()}
+			properties[id] = propVal{Index: prop.Index, Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: prop.Value, Timestamp: prop.Timestamp.UnixMilli()}
 		}
-		payload = messageData{GatewayID: c.gateway.GWID, GatewaySN: c.gateway.SN, ChannelIndex: value.ChannelIndex, DeviceIndex: value.DeviceIndex,
+		payload = messageData{GatewayID: c.gateway.GWID, GatewaySN: c.gateway.SN,
+			DeviceCode:   deviceCode(c.gateway.GWID, value.ChannelIndex, value.DeviceIndex),
+			ChannelIndex: value.ChannelIndex, DeviceIndex: value.DeviceIndex,
 			DeviceName: value.DeviceName, CommNo: value.CommNo, ModelID: value.ModelID,
 			ModelName: value.ModelName, Properties: properties}
 	case engine.WriteResultEvent:

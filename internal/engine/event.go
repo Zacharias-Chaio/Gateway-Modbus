@@ -23,6 +23,7 @@ type TelemetryEvent struct {
 
 // TelemetryProperty is a single property in a telemetry snapshot, keyed by ID.
 type TelemetryProperty struct {
+	Index       int // 属性索引，与物模型属性列表中的序号一致
 	Name        string
 	Unit        string
 	Description string

@@ -32,6 +32,7 @@ const DefaultMaxRegs = 125
 
 // PropMeta 描述单个属性的协议映射元数据（来自设备模型 JSON）。
 type PropMeta struct {
+	Index        int     `json:"index"` // 属性索引（模型属性列表中的序号，与物模型保持一致）
 	Name         string  `json:"name"`
 	PropID       string  `json:"id"`
 	DataType     string  `json:"dataType"`
