@@ -33,6 +33,8 @@ go.work.sum
 # logfile database
 data/*
 logs/*
+docs/web-design-guide.md
+docs/frontend-backend-collaboration.md
 
 # archify visual-check evidence (local review artifacts)
 docs/architecture.visual-check.*
