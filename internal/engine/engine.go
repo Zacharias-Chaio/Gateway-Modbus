@@ -283,11 +283,11 @@ func (e *Engine) Stop() {
 
 // EngineStatus 是 /api/engine/status 的返回结构。
 type EngineStatus struct {
-	State        string       `json:"state"`
+	State        string        `json:"state"`
 	Channels     []workerState `json:"channels"`
-	LastApplyAt  string       `json:"lastApplyAt,omitempty"`
-	LastApplyErr string       `json:"lastApplyErr,omitempty"`
-	Warnings     []string     `json:"warnings,omitempty"`
+	LastApplyAt  string        `json:"lastApplyAt,omitempty"`
+	LastApplyErr string        `json:"lastApplyErr,omitempty"`
+	Warnings     []string      `json:"warnings,omitempty"`
 }
 
 // Status 返回全部链路的运行状态快照，按通道索引升序。

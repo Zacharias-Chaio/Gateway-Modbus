@@ -53,12 +53,14 @@ func (s *Server) Realtime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 缓存键的形如 "deviceIndex/propID"（属性 ID 才是唯一标识，属性名允许重复）。
+	// 返回值同样以属性 ID 为键，前端按 id 取值。
 	values := make(map[string]any)
 	prefix := fmt.Sprintf("%d/", devIdx)
 	for k, v := range all {
 		if strings.HasPrefix(k, prefix) {
-			propName := k[len(prefix):]
-			values[propName] = map[string]any{
+			propKey := k[len(prefix):]
+			values[propKey] = map[string]any{
 				"value": v.Value,
 				"ts":    v.Timestamp.UnixMilli(),
 			}
@@ -82,7 +84,10 @@ func (s *Server) runtimeState() string {
 
 // SetValue 接收对可写属性的设定值，通过引擎下发写命令。
 //
-// 请求体 JSON: { "channelIndex": 0, "deviceIndex": 0, "propName": "频率", "value": 50.0, "waitMs": 3000 }
+// 请求体 JSON: { "channelIndex": 0, "deviceIndex": 0, "propId": "Property-46", "value": 50.0, "waitMs": 3000 }
+//
+// propId 是推荐字段（属性唯一标识）；propName 仅为兼容旧调用方保留——
+// 属性名允许重复，按名字定位可能命中错误的属性。
 //
 // 返回 202 + requestId；若客户端传了 waitMs（上限 10s），则同步等待执行结果后
 // 返回 200 + 结果。以前 HTTP 入口完全没有回执，界面点「下发」只能靠
@@ -91,6 +96,7 @@ func (s *Server) SetValue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ChannelIndex *int    `json:"channelIndex"`
 		DeviceIndex  int     `json:"deviceIndex"`
+		PropID       string  `json:"propId"`
 		PropName     string  `json:"propName"`
 		Value        float64 `json:"value"`
 		WaitMs       int     `json:"waitMs"`
@@ -99,8 +105,17 @@ func (s *Server) SetValue(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "JSON 解析失败: "+err.Error())
 		return
 	}
-	if req.ChannelIndex == nil || *req.ChannelIndex < 0 || req.PropName == "" {
-		fail(w, http.StatusBadRequest, "缺少 channelIndex 或 propName")
+	if req.ChannelIndex == nil || *req.ChannelIndex < 0 {
+		fail(w, http.StatusBadRequest, "缺少 channelIndex")
+		return
+	}
+	// 优先使用属性 ID 定位；仅在未提供时退回属性名。
+	propKey := strings.TrimSpace(req.PropID)
+	if propKey == "" {
+		propKey = strings.TrimSpace(req.PropName)
+	}
+	if propKey == "" {
+		fail(w, http.StatusBadRequest, "缺少 propId（属性 ID）")
 		return
 	}
 	if s.Engine == nil {
@@ -126,7 +141,7 @@ func (s *Server) SetValue(w http.ResponseWriter, r *http.Request) {
 	cmd := engine.WriteCommand{
 		RequestID:   requestID,
 		DeviceIndex: req.DeviceIndex,
-		PropName:    req.PropName,
+		PropName:    propKey,
 		RawValue:    req.Value,
 	}
 

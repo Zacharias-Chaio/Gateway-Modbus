@@ -13,8 +13,8 @@ import (
 	"gateway/internal/config"
 	"gateway/internal/logx"
 
-	gormlogger "gorm.io/gorm/logger"
 	"gorm.io/datatypes"
+	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"

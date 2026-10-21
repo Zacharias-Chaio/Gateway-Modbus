@@ -275,12 +275,18 @@ function saveProp() {
   };
   if (propEditIndex >= 0) state.properties[propEditIndex] = p; else state.properties.push(p);
   propModal.hide();
+  // 该属性被编辑过，清掉它的校验错误标记（其它行的保持不变）
+  if (state.propIssues) {
+    if (propEditIndex >= 0) delete state.propIssues[propEditIndex];
+  }
   renderProps();
 }
 function deleteProp(idx) {
   if (isLocked(idx)) { alert('默认属性不可删除'); return; }
   if (!confirm('确定删除该属性？')) return;
   state.properties.splice(idx, 1);
+  // 删除后下标整体前移，旧的错误标记已失效，直接清空避免标错行
+  state.propIssues = {};
   renderProps();
 }
 function renderProps() {
@@ -291,7 +297,13 @@ function renderProps() {
   empty.classList.add('d-none'); wrap.classList.remove('d-none');
   tb.innerHTML = state.properties.map((p, i) => {
     const bitRange = (p.startBit != null && p.endBit != null) ? `${p.startBit}~${p.endBit}` : '—';
-    return `<tr>
+    // 后端校验问题按属性下标归位，整行标红并展示原因
+    const issues = (state.propIssues && state.propIssues[i]) || [];
+    const rowClass = issues.length ? ' class="table-danger"' : '';
+    const issueCell = issues.length
+      ? `<span class="text-danger small" title="${escapeHtml(issues.map(x => x.message).join('；'))}"><i class="bi bi-exclamation-triangle-fill me-1"></i>${escapeHtml(issues.map(x => x.message).join('；'))}</span>`
+      : '<span class="text-muted small">—</span>';
+    return `<tr${rowClass}>
       <td>${i}</td>
       <td><code>${escapeHtml(p.id)}</code></td>
       <td>${escapeHtml(p.name)}</td>
@@ -302,6 +314,7 @@ function renderProps() {
       <td><span class="badge badge-${escapeHtml(p.accessMode)}">${escapeHtml((p.accessMode || '').toUpperCase())}</span></td>
       <td>${escapeHtml(regAddrDisplay(p))}</td>
       <td>${escapeHtml(bitRange)}</td>
+      <td>${issueCell}</td>
       <td class="text-nowrap">
         ${isLocked(i) ? '<span class="text-muted" title="默认属性不可删除"><i class="bi bi-lock"></i></span>' : `<button class="btn btn-sm btn-link p-0 me-2" onclick="openPropModal(${i})" title="编辑"><i class="bi bi-pencil"></i></button>
         <button class="btn btn-sm btn-link p-0 text-danger" onclick="deleteProp(${i})" title="删除"><i class="bi bi-trash"></i></button>`}
@@ -456,8 +469,53 @@ function saveDeviceModel() {
   const m = state.models.find(x => x.id === state.editingId);
   if (!m) { alert('未找到当前设备模型'); return; }
   apiPost('/models', modelToPayload(m))
-    .then(() => { alert('设备模型已保存到数据库'); backToList(); })
-    .catch(e => alert('保存失败：' + e.message));
+    .then(() => {
+      state.propIssues = {};
+      alert('设备模型已保存到数据库');
+      backToList();
+    })
+    .catch(e => handleModelSaveError(e));
+}
+
+// handleModelSaveError 把后端的结构化校验错误落到表格的具体行。
+//
+// 后端返回 422 + issues:[{index, propId, propName, field, message}]，
+// 其中 index 就是模型属性数组下标，与表格行号一一对应。
+// 之前这里只 alert 一句 msg，用户得自己在几十个属性里数行号、或去后台看日志。
+function handleModelSaveError(e) {
+  const issues = (e && e.issues) || [];
+  if (!issues.length) {
+    alert('保存失败：' + (e && e.message ? e.message : e));
+    return;
+  }
+
+  // 按属性下标归组；无 index 的挂到 -1（全局问题）
+  const byIndex = {};
+  for (const issue of issues) {
+    const idx = Number.isInteger(issue.index) ? issue.index : -1;
+    (byIndex[idx] = byIndex[idx] || []).push(issue);
+  }
+  state.propIssues = byIndex;
+
+  // 切到属性步骤并把出错行滚入视野
+  goStep(2);
+  renderProps();
+
+  const firstIdx = issues.find(x => Number.isInteger(x.index));
+  if (firstIdx) {
+    const row = document.querySelectorAll('#props-tbody tr')[firstIdx.index];
+    if (row) {
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.classList.add('table-warning');
+      setTimeout(() => row.classList.remove('table-warning'), 2000);
+    }
+  }
+
+  const lines = issues.map(x => {
+    const who = x.propName ? `${x.propName}${x.propId ? '(' + x.propId + ')' : ''}` : (x.propId || '未知属性');
+    return `第 ${x.index + 1} 行 ${who}：${x.message}`;
+  });
+  alert(`保存失败，共 ${issues.length} 处配置错误（已在属性列表中标记）：\n\n${lines.join('\n')}`);
 }
 function exportDeviceModel() {
   if (!validateProfile()) { goStep(1); return; }

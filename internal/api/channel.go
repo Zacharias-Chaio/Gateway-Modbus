@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"gateway/internal/engine/connector"
@@ -56,14 +57,18 @@ func (s *Server) SaveChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	// 链路类型收窄：采集网关只支持串口与网络（Modbus RTU / TCP）。
 	if c.Type != connector.TypeSerial && c.Type != connector.TypeNetwork {
-		fail(w, http.StatusBadRequest, "链路类型只支持 Serial / Network，当前为 "+c.Type)
+		failFieldIssues(w, "链路类型无效", FieldIssues{
+			{Index: -1, Field: "type", Message: "链路类型只支持 Serial / Network，当前为 " + c.Type},
+		})
 		return
 	}
 
 	// 配置字段级校验：这是全仓唯一的通道配置契约。
 	cfg, err := connector.ParseConfig(c.Type, c.Config)
 	if err != nil {
-		fail(w, http.StatusBadRequest, "链路配置无效: "+err.Error())
+		failFieldIssues(w, "链路配置无效", FieldIssues{
+			{Index: -1, Field: configIssueField(c.Type), Message: err.Error()},
+		})
 		return
 	}
 
@@ -72,11 +77,13 @@ func (s *Server) SaveChannel(w http.ResponseWriter, r *http.Request) {
 	// 用户在界面上看到的是「保存成功、但设备一直没数据」。
 	mounts, err := decodeMounts(c.Devices)
 	if err != nil {
-		fail(w, http.StatusBadRequest, "设备列表无效: "+err.Error())
+		failFieldIssues(w, "设备列表无效", FieldIssues{
+			{Index: -1, Field: "devices", Message: err.Error()},
+		})
 		return
 	}
 	if err := s.validateMounts(mounts); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+		failValidation(w, err)
 		return
 	}
 
@@ -93,7 +100,10 @@ func (s *Server) SaveChannel(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if otherCfg.ResourceKey() == key {
-				fail(w, http.StatusConflict, "链路配置冲突：串口端口或网络 IP+端口已被链路「"+o.Name+"」占用，不能被多个链路共用")
+				failFieldIssues(w, "链路资源冲突", FieldIssues{
+					{Index: -1, Field: configIssueField(c.Type),
+						Message: "串口端口或网络 IP+端口已被链路「" + o.Name + "」占用，不能被多个链路共用"},
+				})
 				return
 			}
 		}
@@ -128,7 +138,7 @@ func (s *Server) SaveChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.ChannelIndex = exist.ChannelIndex // 通道索引不可修改，保留库中原值
-	c.CreatedAt = exist.CreatedAt        // 保留原始创建时间，避免 Save 写入零值
+	c.CreatedAt = exist.CreatedAt       // 保留原始创建时间，避免 Save 写入零值
 	if err := s.DB.Save(&c).Error; err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -149,17 +159,20 @@ func decodeMounts(raw []byte) ([]store.DeviceMount, error) {
 	return mounts, nil
 }
 
-// validateMounts 校验挂载设备的结构完整性。
+// validateMounts 校验挂载设备的结构完整性，返回**全部**问题（而不是遇到第一条就返回），
+// 并带上设备行号，供前端标红到具体的设备行。
 func (s *Server) validateMounts(mounts []store.DeviceMount) error {
 	if len(mounts) == 0 {
 		return nil
 	}
-	seenIndex := make(map[int]bool, len(mounts))
-	seenComm := make(map[int]bool, len(mounts))
+	seenIndex := make(map[int]int, len(mounts)) // 设备序号 → 首次出现的行
+	seenComm := make(map[int]int, len(mounts))  // 通讯号   → 首次出现的行
 
 	var modelIDs []string
 	for _, m := range mounts {
-		modelIDs = append(modelIDs, m.ModelID)
+		if strings.TrimSpace(m.ModelID) != "" {
+			modelIDs = append(modelIDs, m.ModelID)
+		}
 	}
 	existing := make(map[string]bool, len(modelIDs))
 	if len(modelIDs) > 0 {
@@ -172,36 +185,57 @@ func (s *Server) validateMounts(mounts []store.DeviceMount) error {
 		}
 	}
 
-	for i, m := range mounts {
-		label := fmt.Sprintf("设备 #%d", m.Index)
-		if m.Name != "" {
-			label = fmt.Sprintf("设备 #%d（%s）", m.Index, m.Name)
-		}
+	var issues FieldIssues
+	add := func(row int, m store.DeviceMount, field, format string, args ...any) {
+		issues = append(issues, FieldIssue{
+			Index:   row,
+			Field:   field,
+			Name:    m.Name,
+			RefID:   strconv.Itoa(m.Index),
+			Message: fmt.Sprintf(format, args...),
+		})
+	}
+
+	for row, m := range mounts {
 		if m.Index < 0 {
-			return fmt.Errorf("%s: 设备序号不能为负", label)
+			add(row, m, "index", "设备序号不能为负（当前 %d）", m.Index)
+		} else if first, dup := seenIndex[m.Index]; dup {
+			add(row, m, "index", "设备序号 %d 与第 %d 行重复", m.Index, first+1)
+		} else {
+			seenIndex[m.Index] = row
 		}
-		if seenIndex[m.Index] {
-			return fmt.Errorf("%s: 设备序号重复", label)
-		}
-		seenIndex[m.Index] = true
 
 		if m.CommNo < 1 || m.CommNo > 247 {
-			return fmt.Errorf("%s: 通讯号 %d 越界（合法范围 1~247）", label, m.CommNo)
+			add(row, m, "commNo", "通讯号 %d 越界（合法范围 1~247）", m.CommNo)
+		} else if first, dup := seenComm[m.CommNo]; dup {
+			add(row, m, "commNo", "通讯号 %d 与第 %d 行重复，多个设备使用同一从站地址会互相串话", m.CommNo, first+1)
+		} else {
+			seenComm[m.CommNo] = row
 		}
-		if seenComm[m.CommNo] {
-			return fmt.Errorf("%s: 通讯号 %d 在本链路内重复，多个设备使用同一从站地址会互相串话", label, m.CommNo)
-		}
-		seenComm[m.CommNo] = true
 
 		if strings.TrimSpace(m.ModelID) == "" {
-			return fmt.Errorf("%s: 必须选择设备模型", label)
+			add(row, m, "modelId", "必须选择设备模型")
+		} else if !existing[m.ModelID] {
+			add(row, m, "modelId", "设备模型 %q 不存在", m.ModelID)
 		}
-		if !existing[m.ModelID] {
-			return fmt.Errorf("%s: 设备模型 %q 不存在", label, m.ModelID)
-		}
-		_ = i
+	}
+
+	if len(issues) > 0 {
+		return issues
 	}
 	return nil
+}
+
+// configIssueField 返回链路配置错误对应的前端表单字段名，
+// 让前端能高亮「串口参数」或「网络参数」区块而不是笼统提示。
+func configIssueField(chType string) string {
+	switch chType {
+	case connector.TypeSerial:
+		return "serialName"
+	case connector.TypeNetwork:
+		return "deviceIp"
+	}
+	return "config"
 }
 
 // DeleteChannel 删除指定链路。

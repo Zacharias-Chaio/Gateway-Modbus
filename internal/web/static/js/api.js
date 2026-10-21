@@ -1,9 +1,23 @@
 /* ══════════════ API 客户端 ══════════════ */
 const API = '/api';
+// ApiError 携带后端返回的结构化信息，便于页面把错误定位到具体字段/行。
+// 后端校验失败时返回 422 + issues:[{index, propId, propName, field, message}]，
+// 只取 msg 会丢掉定位能力，用户又得自己去数第几行。
+class ApiError extends Error {
+  constructor(message, status, payload) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status || 0;
+    this.code = (payload && payload.code) || 0;
+    this.issues = (payload && payload.issues) || [];
+    this.warnings = (payload && payload.warnings) || [];
+  }
+  get hasIssues() { return this.issues.length > 0; }
+}
 async function apiReq(path, opts) {
   const r = await fetch(API + path, opts);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok || j.code) throw new Error(j.msg || ('HTTP ' + r.status));
+  if (!r.ok || j.code) throw new ApiError(j.msg || ('HTTP ' + r.status), r.status, j);
   return j.data;
 }
 function apiGet(p) { return apiReq(p); }

@@ -43,7 +43,11 @@ const state = {
   editingId: null,
   channel: null,
   profile: { profileIndex:'', profileId:'', name:'', manufacturer:'', description:'', deviceType:'', deviceModel:'', ratedPower:'', interfaceType:'', protocolType:'', protocolVersion:'', maxRegisterCount: 100 },
-  properties: []
+  properties: [],
+  // 后端校验问题：{ 属性下标: [issue...] }，用于把错误标到属性表格的具体行
+  propIssues: {},
+  // 链路保存的后端校验问题：{ 设备行下标: [issue...] }
+  channelIssues: {}
 };
 let currentStep = 1;
 let chCurrentStep = 1;

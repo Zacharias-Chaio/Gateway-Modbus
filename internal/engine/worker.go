@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,26 +26,25 @@ type workerState struct {
 	LastError    string `json:"lastError,omitempty"`
 
 	// 以下为运维可见性字段：让「实际刷新周期」与「设备级健康」不再只能靠猜。
-	State             string    `json:"state"`                    // connecting / online / reconnecting / fatal
-	ReconnectAttempts int       `json:"reconnectAttempts"`
-	EffectivePollMs   int64     `json:"effectivePollMs"`          // 每个设备实际轮询一轮的毫秒数（估算）
-	LastPollAt        time.Time `json:"lastPollAt,omitempty"`     // 最近一次成功轮询时间
-	LastSuccessAt     time.Time `json:"lastSuccessAt,omitempty"`  // 最近一次成功通讯时间
+	State             string        `json:"state"` // connecting / online / reconnecting / fatal
+	ReconnectAttempts int           `json:"reconnectAttempts"`
+	EffectivePollMs   int64         `json:"effectivePollMs"`         // 每个设备实际轮询一轮的毫秒数（估算）
+	LastPollAt        time.Time     `json:"lastPollAt,omitempty"`    // 最近一次成功轮询时间
+	LastSuccessAt     time.Time     `json:"lastSuccessAt,omitempty"` // 最近一次成功通讯时间
 	Devices           []deviceState `json:"devices"`
 }
 
 // deviceState 是单设备的运行状态。
 type deviceState struct {
-	Index        int       `json:"index"`
-	Name         string    `json:"name"`
-	Valid        bool      `json:"valid"`
-	Error        string    `json:"error,omitempty"`
-	Online       bool      `json:"online"`
-	ConsecFail   int       `json:"consecutiveFailures"`
-	LastPollMs   int64     `json:"lastPollMs,omitempty"`
-	LastPollAt   time.Time `json:"lastPollAt,omitempty"`
+	Index      int       `json:"index"`
+	Name       string    `json:"name"`
+	Valid      bool      `json:"valid"`
+	Error      string    `json:"error,omitempty"`
+	Online     bool      `json:"online"`
+	ConsecFail int       `json:"consecutiveFailures"`
+	LastPollMs int64     `json:"lastPollMs,omitempty"`
+	LastPollAt time.Time `json:"lastPollAt,omitempty"`
 }
-
 
 // worker 承载一条链路：独占一个 Driver，在自己的 goroutine 中管理连接生命周期
 // 与协议轮询、写命令下发。
@@ -63,13 +63,13 @@ type worker struct {
 	// 写命令优先级队列（非阻塞写入，worker 侧优先消费）。
 	writeCh chan WriteCommand
 
-	mu        sync.Mutex
-	connected bool
-	lastErr   string
-	phase     string
-	reconnects int
+	mu          sync.Mutex
+	connected   bool
+	lastErr     string
+	phase       string
+	reconnects  int
 	lastSuccess time.Time
-	devStates map[int]*deviceState
+	devStates   map[int]*deviceState
 
 	// session 值缓存：key = "deviceIndex/propName"
 	sess sync.RWMutex
@@ -175,7 +175,7 @@ func (w *worker) publishTelemetry(dev *DevicePlan, online bool) {
 				}
 				continue
 			}
-			if value, ok := w.data[cacheKey(dev.Index, prop.Name)]; ok {
+			if value, ok := w.data[cacheKey(dev.Index, prop.PropID)]; ok {
 				properties[prop.PropID] = TelemetryProperty{Index: prop.Index, Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: value.Value, Timestamp: value.Timestamp}
 			} else {
 				properties[prop.PropID] = TelemetryProperty{Index: prop.Index, Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: nil, Timestamp: now}
@@ -194,9 +194,12 @@ func (w *worker) publishTelemetry(dev *DevicePlan, online bool) {
 	})
 }
 
+// addOnlineTelemetry 把设备在线状态写入本轮遥测快照。
+// 在线点按属性 ID 识别（内置在线点 ID 为 "online"），属性名仅作兜底兼容——
+// 属性名允许重复、也允许用户改名，不能作为唯一依据。
 func (w *worker) addOnlineTelemetry(properties map[string]TelemetryProperty, dev *DevicePlan, value int64, timestamp time.Time) {
 	for _, prop := range dev.Props {
-		if prop.Name != OnlinePropName {
+		if prop.PropID != OnlinePropID && prop.Name != OnlinePropName {
 			continue
 		}
 		if prop.PropID == "" {
@@ -354,8 +357,20 @@ func (w *worker) collectLoop(ctx context.Context) error {
 		}
 	}
 	if len(targets) == 0 {
+		// 把每个无效设备的具体原因一并打出来。以前只报「全部配置无效」，
+		// 真正的原因（模型缺失 / 属性重名 / 地址越界…）藏在另一条告警里，
+		// 运维只看这两行日志无从下手。
+		reasons := make([]string, 0, len(w.plan.Devices))
+		for i := range w.plan.Devices {
+			d := &w.plan.Devices[i]
+			reason := d.ErrMsg
+			if reason == "" {
+				reason = "未知原因"
+			}
+			reasons = append(reasons, fmt.Sprintf("#%d(%s): %s", d.Index, d.DisplayName(), reason))
+		}
 		w.log.Warn("链路没有可采集的设备（全部挂载项配置无效），等待配置修复",
-			"channel", w.name, "devices", len(w.plan.Devices))
+			"channel", w.name, "devices", len(w.plan.Devices), "reasons", strings.Join(reasons, "；"))
 		// 保持在线状态但空转：配置修好后热重载会重建 worker。
 		<-ctx.Done()
 		return nil
@@ -605,7 +620,9 @@ func (w *worker) applyMembers(dev *DevicePlan, g converter.RegGroup, raw []byte)
 			w.logMapError(dev, g, m, err)
 			continue
 		}
-		key := cacheKey(dev.Index, m.Prop.Name)
+		// 缓存键用属性 ID 而不是属性名：属性名允许重复（现场常见同名点位
+		// 分布在不同数据块），用名字做键会让同名属性互相覆盖数据。
+		key := cacheKey(dev.Index, m.Prop.CacheKey())
 		w.sess.Lock()
 		w.data[key] = SessionEntry{Value: val, Timestamp: time.Now()}
 		w.sess.Unlock()
@@ -876,13 +893,13 @@ func (w *worker) state() workerState {
 		effective = w.cfg.PollDuration().Milliseconds() * int64(len(devices))
 	}
 	return workerState{
-		ChannelIndex: w.index,
-		Name:         w.name,
-		Type:         w.cfg.Type,
-		Target:       w.cfg.Target(),
-		Connected:    connected,
-		LastError:    lastErr,
-		State:        phase,
+		ChannelIndex:      w.index,
+		Name:              w.name,
+		Type:              w.cfg.Type,
+		Target:            w.cfg.Target(),
+		Connected:         connected,
+		LastError:         lastErr,
+		State:             phase,
 		ReconnectAttempts: reconnects,
 		EffectivePollMs:   effective,
 		LastSuccessAt:     lastSuccess,
@@ -909,13 +926,17 @@ func (w *worker) logRX(dev *DevicePlan, operation string, attempt int, p []byte,
 	w.log.Debug("RX 接收报文", "channel", w.name, "device", dev.DisplayName(), "hex", fmt.Sprintf("% x", p), "len", len(p))
 }
 
-// OnlinePropName 是设备在线状态的虚拟属性名（模型默认属性，不映射实际寄存器）。
+// OnlinePropName 是设备在线状态的虚拟属性名（模型默认属性的显示名）。
 const OnlinePropName = "在线状态"
 
+// OnlinePropID 是设备在线状态的虚拟属性 ID（内置在线点，唯一标识）。
+const OnlinePropID = "online"
+
 // hasOnlineProp 判断设备模型的属性表中是否包含"在线状态"虚拟属性。
+// 以属性 ID 优先、属性名兜底，兼容历史模型。
 func hasOnlineProp(dev *DevicePlan) bool {
 	for _, p := range dev.Props {
-		if p.Name == OnlinePropName {
+		if p.PropID == OnlinePropID || p.Name == OnlinePropName {
 			return true
 		}
 	}
@@ -924,7 +945,8 @@ func hasOnlineProp(dev *DevicePlan) bool {
 
 // setOnlineValue 更新指定设备的在线状态缓存。
 func (w *worker) setOnlineValue(dev *DevicePlan, online bool) {
-	if !hasOnlineProp(dev) {
+	key, ok := onlineCacheKey(dev)
+	if !ok {
 		return
 	}
 	val := int64(0)
@@ -932,8 +954,18 @@ func (w *worker) setOnlineValue(dev *DevicePlan, online bool) {
 		val = 1
 	}
 	w.sess.Lock()
-	w.data[cacheKey(dev.Index, OnlinePropName)] = SessionEntry{Value: val, Timestamp: time.Now()}
+	w.data[key] = SessionEntry{Value: val, Timestamp: time.Now()}
 	w.sess.Unlock()
+}
+
+// onlineCacheKey 返回该设备在线点的缓存键（优先按属性 ID）。
+func onlineCacheKey(dev *DevicePlan) (string, bool) {
+	for _, p := range dev.Props {
+		if p.PropID == OnlinePropID || p.Name == OnlinePropName {
+			return cacheKey(dev.Index, p.CacheKey()), true
+		}
+	}
+	return "", false
 }
 
 // markAllOffline 将该链路下所有包含"在线状态"属性的设备标记为离线（0）。

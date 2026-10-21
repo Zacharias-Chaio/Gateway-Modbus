@@ -1,6 +1,6 @@
 /* ══════════════ 实时数据 · Realtime ══════════════ */
 
-// rtValues 缓存从引擎获取的实时值，key = propName
+// rtValues 缓存从引擎获取的实时值，key = 属性 ID（属性名允许重复，不能作键）
 let rtValues = {};
 let rtTimer = null;
 let rtLoading = false;
@@ -93,7 +93,8 @@ async function fetchRtValues() {
       for (const p of (m.properties || [])) {
         const cell = document.getElementById('rtval-' + p.id);
         if (!cell) continue;
-        const entry = rtValues[p.name];
+        // 实时值以属性 ID 为键（属性名允许重复，不能作为键）
+        const entry = rtValues[p.id];
         const hasVal = entry !== undefined && entry !== null && entry.value !== undefined && entry.value !== null;
         cell.textContent = hasVal ? formatRtValue(entry.value, p.dataType) : '—';
         cell.classList.toggle('text-muted', !hasVal);
@@ -188,9 +189,11 @@ async function setRtValue(propId) {
   try {
     // waitMs=5000：同步等待写命令在链路上的最终执行结果（含设备异常码）。
     // 之前这里拿不到任何回执，只能靠「值有没有变化」反推。
+    // 用属性 ID 下发（属性名可重复，按名字会打到错误的属性上）
     const res = await apiPost('/set', {
       channelIndex: sel.channelIndex,
       deviceIndex: sel.deviceIndex,
+      propId: p.id,
       propName: p.name,
       value: numVal,
       waitMs: 5000

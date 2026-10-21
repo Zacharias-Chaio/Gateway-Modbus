@@ -83,14 +83,23 @@ function renderChannelDeviceTable() {
     wrap.classList.add('d-none'); empty.classList.remove('d-none'); tbody.innerHTML = ''; return;
   }
   empty.classList.add('d-none'); wrap.classList.remove('d-none');
-  tbody.innerHTML = devices.map((d, i) => `
-    <tr>
+  const issues = state.channelIssues || {};
+  tbody.innerHTML = devices.map((d, i) => {
+    const rowIssues = issues[i] || [];
+    const rowClass = rowIssues.length ? ' class="table-danger"' : '';
+    const issueCell = rowIssues.length
+      ? `<span class="text-danger small" title="${escapeHtml(rowIssues.map(x => x.message).join('；'))}"><i class="bi bi-exclamation-triangle-fill me-1"></i>${escapeHtml(rowIssues.map(x => x.message).join('；'))}</span>`
+      : '<span class="text-muted small">—</span>';
+    return `
+    <tr${rowClass}>
       <td><span class="ch-device-idx">${i}</span></td>
       <td><input type="number" min="1" max="247" step="1" class="form-control form-control-sm ch-comm-input" value="${escapeHtml(d.commNo ?? '')}" oninput="onCommNoInput()"></td>
       <td><input type="text" maxlength="64" placeholder="请输入设备名称" class="form-control form-control-sm ch-name-input" value="${escapeHtml(d.name ?? '')}"></td>
       <td><select class="form-select form-select-sm" oninput="onCommNoInput()">${chDeviceModelOptions(d.modelId)}</select></td>
+      <td>${issueCell}</td>
       <td class="text-end"><button type="button" class="btn btn-outline-danger btn-sm" onclick="chRemoveDevice(${i})" title="移除"><i class="bi bi-trash"></i></button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   validateChannelDevices(false);
 }
 function chAddDevice() {
@@ -274,9 +283,60 @@ function saveChannel() {
       if (channelEditIndex >= 0) state.channels[channelEditIndex] = ch;
       else { state.channels.push(ch); channelEditIndex = state.channels.length - 1; }
       alert(wasNew ? '链路已创建并保存到数据库' : '链路已更新');
+      state.channelIssues = {};
       backToChannelList();
     })
-    .catch(e => alert('保存失败：' + e.message));
+    .catch(e => handleChannelSaveError(e));
+}
+
+// handleChannelSaveError 把后端的结构化校验错误落到链路表单的具体行/字段。
+//
+// 后端返回 422 + issues:[{index, field, name, refId, message}]：
+//   index >= 0 指「挂载设备」表格的行号；index = -1 表示表单字段级错误。
+function handleChannelSaveError(e) {
+  const issues = (e && e.issues) || [];
+  if (!issues.length) {
+    alert('保存失败：' + (e && e.message ? e.message : e));
+    return;
+  }
+
+  const byRow = {};
+  const fieldIssues = [];
+  for (const issue of issues) {
+    const idx = Number.isInteger(issue.index) ? issue.index : -1;
+    if (idx >= 0) (byRow[idx] = byRow[idx] || []).push(issue);
+    else fieldIssues.push(issue);
+  }
+  state.channelIssues = byRow;
+
+  // 设备行错误：跳到设备步骤并标红
+  if (Object.keys(byRow).length) {
+    chGoStep(2);
+    renderChannelDeviceTable();
+    const firstIdx = Number(Object.keys(byRow)[0]);
+    const row = document.querySelectorAll('#ch-device-rows tr')[firstIdx];
+    if (row) {
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.classList.add('table-warning');
+      setTimeout(() => row.classList.remove('table-warning'), 2000);
+    }
+  }
+
+  // 字段级错误：高亮对应输入框
+  for (const issue of fieldIssues) {
+    if (!issue.field) continue;
+    const el = document.getElementById('ch-' + issue.field);
+    if (el) {
+      el.classList.add('is-invalid');
+      setTimeout(() => el.classList.remove('is-invalid'), 4000);
+      if (!Object.keys(byRow).length) { chGoStep(1); el.scrollIntoView({ block: 'center' }); }
+    }
+  }
+
+  const lines = issues.map(x => x.index >= 0
+    ? `第 ${x.index + 1} 行设备${x.name ? '（' + x.name + '）' : ''}：${x.message}`
+    : `表单字段${x.field ? ' ' + x.field : ''}：${x.message}`);
+  alert(`保存失败，共 ${issues.length} 处配置错误（已在表单中标记）：\n\n${lines.join('\n')}`);
 }
 function buildChannelConfig(c) {
   const devices = (c.devices || []).map((d, i) => {

@@ -70,9 +70,9 @@ type PropMeta struct {
 	Coefficient  float64 `json:"coefficient"`
 	DeltaValue   float64 `json:"deltaValue"` // 偏移量（可正负），工程值 = 原始值 × coefficient + deltaValue
 	ByteOrder    string  `json:"byteOrder"`
-	AccessMode   string  `json:"accessMode"`  // r / w / rw
-	Unit         string  `json:"unit"`        // 工程量单位（遥测上报用）
-	Description  string  `json:"description"` // 属性值描述（遥测上报用）
+	AccessMode   string  `json:"accessMode"`       // r / w / rw
+	Unit         string  `json:"unit"`             // 工程量单位（遥测上报用）
+	Description  string  `json:"description"`      // 属性值描述（遥测上报用）
 	Signed       *bool   `json:"signed,omitempty"` // 是否有符号；nil 表示按位区间自动推断
 
 	// RegisterCount 寄存器数量（读取跨度），必填 1~125；由 buildDevicePlan 统一校验。
@@ -128,12 +128,23 @@ func (p PropMeta) ReadByteRange(offsetInGroup int) (byteOffset, byteLen int) {
 // IsBitSpace 判断该属性是否位于位地址空间（FC01/02）。
 func (p PropMeta) IsBitSpace() bool { return p.AddrSpace() == AddrSpaceBit }
 
+// CacheKey 返回属性在运行期缓存与写命令中的定位键：优先属性 ID，
+// 缺失时退回属性名（构建期已拦截空 ID，这里只是兜底）。
+//
+// 属性名允许重复，属性 ID 才唯一，所以键必须以 ID 为准。
+func (p PropMeta) CacheKey() string {
+	if p.PropID != "" {
+		return p.PropID
+	}
+	return p.Name
+}
+
 // RegGroup 是一次读请求对应的寄存器组。
 type RegGroup struct {
-	ReadFC    int        // Modbus 功能码
-	StartAddr int        // 实际请求的起始地址（= registerBase）
-	Quantity  int        // 请求的数量（寄存器数或位数，取决于 AddrSpace）
-	AddrSpace AddrSpace  // 地址空间，决定响应帧的字节布局
+	ReadFC    int       // Modbus 功能码
+	StartAddr int       // 实际请求的起始地址（= registerBase）
+	Quantity  int       // 请求的数量（寄存器数或位数，取决于 AddrSpace）
+	AddrSpace AddrSpace // 地址空间，决定响应帧的字节布局
 	Members   []GroupMember
 }
 
@@ -277,15 +288,22 @@ func protocolUnitLimit(space AddrSpace) int {
 	return DefaultMaxRegs
 }
 
-// FindWriteProp 在属性列表中查找指定属性名的可写属性。
-// 返回属性元数据和 nil；未找到返回零值和错误。
-func FindWriteProp(props []PropMeta, propName string) (PropMeta, error) {
+// FindWriteProp 在属性列表中查找可写属性。
+//
+// 优先按属性 ID 精确匹配（唯一标识）；为兼容历史命令仍接受属性名，
+// 但属性名可能重复，命中第一条即返回，因此新代码应一律使用属性 ID。
+func FindWriteProp(props []PropMeta, propKey string) (PropMeta, error) {
 	for _, p := range props {
-		if p.Name == propName && canWrite(p.AccessMode) {
+		if p.PropID == propKey && canWrite(p.AccessMode) {
 			return p, nil
 		}
 	}
-	return PropMeta{}, fmt.Errorf("属性 %q 不可写或不存在", propName)
+	for _, p := range props {
+		if p.Name == propKey && canWrite(p.AccessMode) {
+			return p, nil
+		}
+	}
+	return PropMeta{}, fmt.Errorf("属性 %q 不可写或不存在", propKey)
 }
 
 // canRead 判断属性是否可读（大小写不敏感，避免 "RW" 这类配置静默失效）。

@@ -56,8 +56,9 @@ func validateModelProfile(m *store.DeviceModel) error {
 
 // validateModelProperties 在保存阶段校验属性数组，而不是等到运行期。
 //
-// 与 engine.buildDevicePlan 的 validateProps 共用同一套规则：
-// 属性名/ID 唯一、访问模式/功能码白名单、地址与位区间范围、写功能码组合一致性。
+// 与 engine.buildDevicePlan 共用 converter.ValidateProps，保证
+// 「保存时通过」与「运行时可执行」不会出现分歧。
+// 唯一性以属性 ID 为准；属性名允许重复（仅作展示）。
 func validateModelProperties(properties []byte) error {
 	if len(properties) == 0 {
 		return nil
@@ -95,7 +96,7 @@ func (s *Server) SaveModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateModelProperties(m.Properties); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+		failValidation(w, err)
 		return
 	}
 	// 若已存在则保留原始创建时间，避免 Save 全字段更新把 CreatedAt 写成零值。
