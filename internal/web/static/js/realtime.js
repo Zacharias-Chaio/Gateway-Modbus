@@ -46,11 +46,19 @@ function fillSelect(sel, items, getVal, getLabel, keepVal) {
 // ── 自动刷新控制 ──
 function rtStartPolling() {
   rtStopPolling();
-  rtTimer = setInterval(fetchRtValues, 2000);
+  rtTimer = setInterval(() => {
+    // 页面不可见时暂停轮询，避免 N 个后台标签线性放大后端压力
+    if (document.hidden) return;
+    fetchRtValues();
+  }, 2000);
 }
 function rtStopPolling() {
   if (rtTimer) { clearInterval(rtTimer); rtTimer = null; }
 }
+// 页面重新可见时立即刷新一次，避免数据看起来「停住了」
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && rtTimer) fetchRtValues();
+});
 
 // renderRealtime 由 switchSection('realtime') 触发：填充下拉、启动轮询。
 // 通道以下拉顺序（通道索引）定位，标签展示自动生成的通道ID（Channel-{索引}）。
@@ -97,14 +105,28 @@ async function fetchRtValues() {
         }
       }
     }
-    // 更新状态提示
+    // 更新状态提示：区分「链路重启中」「链路未运行」「真的没有数据」
     const hint = document.getElementById('rt-hint');
     if (hint) {
       const hasData = Object.keys(rtValues).length > 0;
-      hint.textContent = hasData ? '采集中 · 最后更新 ' + new Date((data && data.timestamp || 0) * 1000).toLocaleTimeString() : '无采集数据（链路未连接或设备未响应）';
+      const note = data && data.note;
+      if (hasData) {
+        hint.textContent = '采集中 · 最后更新 ' + new Date((data && data.timestamp || 0) * 1000).toLocaleTimeString();
+        hint.classList.remove('text-warning');
+      } else if (note) {
+        hint.textContent = note;
+        hint.classList.add('text-warning');
+      } else {
+        hint.textContent = '无采集数据（设备未响应或属性未映射成功，可查看通讯监控）';
+        hint.classList.add('text-warning');
+      }
     }
   } catch (e) {
-    // 静默失败，不影响已有数据展示
+    const hint = document.getElementById('rt-hint');
+    if (hint) {
+      hint.textContent = '无法获取实时数据：' + e.message + (e.message.indexOf('HTTP') >= 0 ? '（引擎可能正在重启）' : '');
+      hint.classList.add('text-warning');
+    }
   } finally {
     rtLoading = false;
   }
@@ -164,16 +186,23 @@ async function setRtValue(propId) {
   if (isNaN(numVal)) { alert('设定值必须是数字'); return; }
   input.disabled = true;
   try {
-    await apiPost('/set', {
+    // waitMs=5000：同步等待写命令在链路上的最终执行结果（含设备异常码）。
+    // 之前这里拿不到任何回执，只能靠「值有没有变化」反推。
+    const res = await apiPost('/set', {
       channelIndex: sel.channelIndex,
       deviceIndex: sel.deviceIndex,
       propName: p.name,
-      value: numVal
+      value: numVal,
+      waitMs: 5000
     });
-    alert(`已下发：${p.name} = ${v}\n（写命令已投递，实际生效请查看通讯日志）`);
-    input.value = '';
-    // 立即刷新一次值
-    setTimeout(fetchRtValues, 500);
+    const status = res && res.status;
+    if (status === 'ok') {
+      alert(`下发成功：${p.name} = ${v}` + (res.applied > 1 ? `（分 ${res.applied} 帧写入）` : ''));
+      input.value = '';
+    } else {
+      alert(`已下发，等待结果超时：${p.name} = ${v}\n命令仍在链路队列中执行，请查看通讯监控确认结果。`);
+    }
+    setTimeout(fetchRtValues, 300);
   } catch (e) {
     alert('下发失败：' + e.message);
   } finally {

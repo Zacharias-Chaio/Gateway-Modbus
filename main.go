@@ -62,7 +62,10 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("优雅关闭失败", "err", err)
+		logx.Shutdown()
 		os.Exit(1)
 	}
 	logger.Info("服务已关闭")
+	// 关闭日志写入器，确保文件缓冲落盘、句柄释放。
+	logx.Shutdown()
 }

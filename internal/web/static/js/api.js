@@ -42,9 +42,10 @@ async function loadSystemInfo() {
 function channelFromRow(r) {
   return { id: String(r.id || ''), channelIndex: toNum(r.channelIndex, null), name: r.name || '', type: r.type || '',
     reconnectRetries: r.config && r.config.reconnectRetries, resendRetries: r.config && r.config.resendRetries, pollInterval: r.config && r.config.pollInterval,
+    frameInterval: r.config && r.config.frameInterval, frameTimeoutMs: r.config && r.config.frameTimeoutMs,
     serialName: hwKey('Serial', r.config && r.config.serialName), baudRate: r.config && r.config.baudRate, dataBits: r.config && r.config.dataBits, parity: r.config && r.config.parity, stopBits: r.config && r.config.stopBits,
     deviceIp: r.config && r.config.deviceIp, devicePort: r.config && r.config.devicePort,
-    devices: (r.devices || []).map((d, i) => ({ index: i, commNo: String(d.commNo), name: d.name || '', modelId: String(d.modelId) })) };
+    devices: (r.devices || []).map((d, i) => ({ index: d.index != null ? d.index : i, commNo: String(d.commNo), name: d.name || '', modelId: String(d.modelId) })) };
 }
 function channelToPayload(c) {
   const config = buildChannelConfig(c);

@@ -2,17 +2,18 @@
 // 将一条日志同时扇出到三路出口——终端窗口、滚动文件、前端出口接口。
 //
 //	业务代码 logx.Module("channel").Info(...)
-//	          └─ fanout ─┬─ TextHandler  → 终端(os.Stdout)
-//	                     ├─ JSONHandler  → 滚动文件(大小 + 每日轮转)
-//	                     └─ sinkHandler  → 环形缓冲 + SSE（/api/syslog）
+//	          └─ swapHandler ─┬─ TextHandler  → 终端(os.Stdout)
+//	                          ├─ JSONHandler  → 滚动文件(大小 + 每日轮转)
+//	                          └─ sinkHandler  → 环形缓冲 + SSE（/api/syslog）
 package logx
 
 import (
-	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Options 日志管理器初始化参数。
@@ -31,7 +32,9 @@ type Options struct {
 type runtimeState struct {
 	logger       *slog.Logger
 	sink         *ringSink
+	swap         *swapHandler
 	stopRotation func()
+	oldWriter    *closerHolder
 }
 
 var (
@@ -41,6 +44,10 @@ var (
 )
 
 // Init 按配置装配三路输出并设置为全局默认日志器。可重复调用（热重载配置）。
+//
+// 关键点：全局只保留一个 swapHandler，Init 只替换它的内层 handler。
+// 这样 engine / worker / nats 这些在构造时就捕获了 logger 的组件，
+// 也会立刻用上新配置。
 func Init(opt Options) {
 	initMu.Lock()
 	defer initMu.Unlock()
@@ -55,10 +62,14 @@ func Init(opt Options) {
 
 	// 2) 滚动文件：JSON 格式，便于后续采集/检索；大小 + 每日轮转。
 	var stopRotation func()
+	var newWriter *closerHolder
 	if opt.File != "" {
 		writer, stop := newRotator(opt)
 		stopRotation = stop
 		handlers = append(handlers, slog.NewJSONHandler(writer, &slog.HandlerOptions{Level: level}))
+		if cw, ok := writer.(closableWriter); ok {
+			newWriter = &closerHolder{w: cw}
+		}
 	}
 
 	// 3) 前端出口：复用已有缓冲，避免热重载中断已建立的 SSE 订阅。
@@ -73,14 +84,54 @@ func Init(opt Options) {
 	mu.Unlock()
 	handlers = append(handlers, s.handler(level))
 
-	logger := slog.New(&fanout{handlers: handlers})
+	var inner slog.Handler
+	if len(handlers) == 1 {
+		inner = handlers[0]
+	} else {
+		inner = &fanout{handlers: handlers}
+	}
 
 	mu.Lock()
-	runtime = runtimeState{logger: logger, sink: s, stopRotation: stopRotation}
-	slog.SetDefault(logger) // 与运行态替换保持同一临界区，避免并发重载顺序倒退。
+	if runtime.swap != nil {
+		// 热重载：只换内层，保留已分发的 logger。
+		runtime.swap.Swap(inner)
+		runtime.stopRotation = stopRotation
+		runtime.oldWriter = newWriter
+	} else {
+		swap := newSwapHandler(inner)
+		runtime = runtimeState{
+			logger: slog.New(swap), sink: s, swap: swap,
+			stopRotation: stopRotation, oldWriter: newWriter,
+		}
+		slog.SetDefault(runtime.logger)
+	}
 	mu.Unlock()
+
+	// 停掉旧的轮转 goroutine，并关闭旧的写入器句柄。
+	// 以前只停 goroutine、从不 Close 旧的 lumberjack：每次保存设置就泄漏一个
+	// 文件句柄，且新旧两个 lumberjack 同时写同一文件，轮转时互相踩踏丢日志。
 	if previous.stopRotation != nil {
 		previous.stopRotation()
+	}
+	if previous.oldWriter != nil {
+		previous.oldWriter.Close()
+	}
+}
+
+// Shutdown 关闭日志资源（进程退出前调用，确保缓冲落盘）。
+func Shutdown() {
+	initMu.Lock()
+	defer initMu.Unlock()
+
+	mu.Lock()
+	prev := runtime
+	mu.Unlock()
+
+	if prev.stopRotation != nil {
+		prev.stopRotation()
+	}
+	if prev.oldWriter != nil {
+		prev.oldWriter.Close()
 	}
 }
 
@@ -110,45 +161,29 @@ func ParseLevel(s string) slog.Level {
 	}
 }
 
-// fanout 是一个把单条记录分发到多个子 handler 的 slog.Handler。
-type fanout struct {
-	handlers []slog.Handler
-}
-
-func (f *fanout) Enabled(ctx context.Context, l slog.Level) bool {
-	for _, h := range f.handlers {
-		if h.Enabled(ctx, l) {
-			return true
+// RequestLogLevel 决定一条 HTTP 访问日志的级别：
+// 轮询类只读接口（realtime / comm-monitor / syslog / engine status）降到 Debug，
+// 否则一个打开的页面就能以 2Hz 的速度刷满日志文件。
+func RequestLogLevel(method, path string, status int) slog.Level {
+	if status >= 500 {
+		return slog.LevelError
+	}
+	if status >= 400 {
+		return slog.LevelWarn
+	}
+	if method == http.MethodGet {
+		switch {
+		case strings.HasPrefix(path, "/api/realtime"),
+			strings.HasPrefix(path, "/api/comm-monitor"),
+			strings.HasPrefix(path, "/api/syslog"),
+			strings.HasPrefix(path, "/api/engine/status"),
+			strings.HasPrefix(path, "/healthz"),
+			strings.HasPrefix(path, "/readyz"):
+			return slog.LevelDebug
 		}
 	}
-	return false
+	return slog.LevelInfo
 }
 
-func (f *fanout) Handle(ctx context.Context, r slog.Record) error {
-	for _, h := range f.handlers {
-		if h.Enabled(ctx, r.Level) {
-			// 每个子 handler 拿到独立副本，避免 Attrs 迭代相互影响。
-			_ = h.Handle(ctx, r.Clone())
-		}
-	}
-	return nil
-}
-
-func (f *fanout) WithAttrs(attrs []slog.Attr) slog.Handler {
-	next := make([]slog.Handler, len(f.handlers))
-	for i, h := range f.handlers {
-		next[i] = h.WithAttrs(attrs)
-	}
-	return &fanout{handlers: next}
-}
-
-func (f *fanout) WithGroup(name string) slog.Handler {
-	next := make([]slog.Handler, len(f.handlers))
-	for i, h := range f.handlers {
-		next[i] = h.WithGroup(name)
-	}
-	return &fanout{handlers: next}
-}
-
-// 确保实现接口。
-var _ slog.Handler = (*fanout)(nil)
+// 保持 time 引用（部分构建下用于未来扩展的时间窗采样）。
+var _ = time.Now

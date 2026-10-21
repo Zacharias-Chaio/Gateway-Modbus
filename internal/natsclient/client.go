@@ -1,4 +1,3 @@
-// Package natsclient adapts engine events to the gateway's Core NATS contract.
 package natsclient
 
 import (
@@ -18,36 +17,49 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// Client publishes engine events and serves the cmd and query subjects.
+// CommandTarget 是北向客户端需要的写命令能力。
+// 收窄为接口后，runtime.Manager 可以在重启窗口内返回明确的失败，
+// 而不是让 NATS 侧持有一个构造时的引擎指针、写到已被 stop 的引擎上。
+type CommandTarget interface {
+	Submit(channelIndex int, cmd engine.WriteCommand) bool
+	HasDevice(channelIndex, deviceIndex int) bool
+	Connected(channelIndex int) bool
+}
+
+// Client 是 Core NATS 北向客户端。
 type Client struct {
-	config       config.NATS
-	gateway      config.Gateway
-	source       engine.PlanSource
-	engine       *engine.Engine
-	log          *slog.Logger
-	conn         *nats.Conn
-	data         string
-	cmd          string
-	query        string
+	config  config.NATS
+	gateway config.Gateway
+	source  engine.PlanSource
+	target  CommandTarget
+	log     *slog.Logger
+
+	data  string
+	cmd   string
+	query string
+
+	conn *nats.Conn
+
 	events       chan any
 	eventsMu     sync.Mutex
 	eventsClosed bool
-	stopOnce     sync.Once
-	done         chan struct{}
+
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
-// New connects to NATS and starts the event publisher and request subscriptions.
 // source 提供链路与设备模型配置（拓扑查询用），北向客户端不直接依赖存储层。
-func New(ctx context.Context, gateway config.Gateway, cfg config.NATS, source engine.PlanSource, eng *engine.Engine) (*Client, error) {
-	if gateway.GWID == "" || strings.Contains(gateway.GWID, ".") {
-		return nil, fmt.Errorf("无效 gateway.gw_id")
+func New(ctx context.Context, gateway config.Gateway, cfg config.NATS, source engine.PlanSource, target CommandTarget) (*Client, error) {
+	gwID, err := config.ValidateGWID(gateway.GWID)
+	if err != nil {
+		return nil, err
 	}
 	if cfg.SubjectPrefix == "" {
 		return nil, fmt.Errorf("nats.subjectPrefix 不能为空")
 	}
-	prefix := strings.TrimSuffix(cfg.SubjectPrefix, ".") + "." + gateway.GWID
+	prefix := strings.TrimSuffix(cfg.SubjectPrefix, ".") + "." + gwID
 	client := &Client{
-		config: cfg, gateway: gateway, source: source, engine: eng, log: logx.Module("nats"),
+		config: cfg, gateway: gateway, source: source, target: target, log: logx.Module("nats"),
 		data: prefix + ".data", cmd: prefix + ".cmd", query: prefix + ".query",
 		events: make(chan any, queueSize(cfg.QueueSize)), done: make(chan struct{}),
 	}
@@ -63,6 +75,10 @@ func New(ctx context.Context, gateway config.Gateway, cfg config.NATS, source en
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) { client.log.Warn("NATS 已断开", "err", err) }),
 		nats.ReconnectHandler(func(conn *nats.Conn) { client.log.Info("NATS 已重连", "url", conn.ConnectedUrl()) }),
 		nats.ClosedHandler(func(conn *nats.Conn) { client.log.Warn("NATS 已关闭", "err", conn.LastError()) }),
+	}
+	// 支持用户名密码（明文 TLS 终结由反向代理负责，避免在嵌入式设备上维护证书）。
+	if cfg.Username != "" {
+		opts = append(opts, nats.UserInfo(cfg.Username, cfg.Password))
 	}
 	conn, err := nats.Connect(cfg.URL, opts...)
 	if err != nil {
@@ -149,29 +165,45 @@ func (c *Client) publishLoop(ctx context.Context) {
 }
 
 func (c *Client) publishEvent(event any) {
-	var messageType string
-	var payload any
-	switch value := event.(type) {
+	switch e := event.(type) {
 	case engine.TelemetryEvent:
-		messageType = "data"
-		properties := make(map[string]propVal, len(value.Properties))
-		for id, prop := range value.Properties {
-			properties[id] = propVal{Index: prop.Index, Name: prop.Name, Unit: prop.Unit, Description: prop.Description, AccessMode: prop.AccessMode, Value: prop.Value, Timestamp: prop.Timestamp.UnixMilli()}
-		}
-		payload = messageData{GatewayID: c.gateway.GWID, GatewaySN: c.gateway.SN,
-			DeviceCode:   deviceCode(c.gateway.GWID, value.ChannelIndex, value.DeviceIndex),
-			ChannelIndex: value.ChannelIndex, DeviceIndex: value.DeviceIndex,
-			DeviceName: value.DeviceName, CommNo: value.CommNo, ModelID: value.ModelID,
-			ModelName: value.ModelName, Properties: properties}
+		c.publishTelemetry(e)
 	case engine.WriteResultEvent:
-		messageType = "cmdAck"
-		status := "success"
-		if !value.OK {
-			status = "failure"
+		c.publishWriteResult(e)
+	}
+}
+
+func (c *Client) publishTelemetry(event engine.TelemetryEvent) {
+	payload := messageData{
+		GatewayID:    c.gateway.GWID,
+		GatewaySN:    c.gateway.SN,
+		DeviceCode:   deviceCode(c.gateway.GWID, event.ChannelIndex, event.DeviceIndex),
+		ChannelIndex: event.ChannelIndex,
+		DeviceIndex:  event.DeviceIndex,
+		DeviceName:   event.DeviceName,
+		CommNo:       event.CommNo,
+		ModelID:      event.ModelID,
+		ModelName:    event.ModelName,
+		Properties:   make(map[string]propVal, len(event.Properties)),
+	}
+	for key, p := range event.Properties {
+		payload.Properties[key] = propVal{
+			Index: p.Index, Name: p.Name, Unit: p.Unit, Description: p.Description,
+			AccessMode: p.AccessMode, Value: p.Value, Timestamp: p.Timestamp.UnixMilli(),
 		}
-		payload = messageAck{RequestID: value.RequestID, ChannelIndex: value.ChannelIndex,
-			DeviceIndex: value.DeviceIndex, Status: status, Message: value.Error}
-	default:
+	}
+	c.publish("telemetry", payload)
+}
+
+func (c *Client) publishWriteResult(event engine.WriteResultEvent) {
+	c.publish("cmdResult", messageAck{
+		RequestID: event.RequestID, ChannelIndex: event.ChannelIndex, DeviceIndex: event.DeviceIndex,
+		Status: statusOf(event.OK), Message: event.Error,
+	})
+}
+
+func (c *Client) publish(messageType string, payload any) {
+	if c.conn == nil {
 		return
 	}
 	data, err := json.Marshal(payload)
@@ -196,16 +228,16 @@ func (c *Client) handleCommand(msg *nats.Msg) {
 		c.respondAck(msg, messageAck{RequestID: env.ID, ChannelIndex: command.ChannelIndex, DeviceIndex: command.DeviceIndex, Status: "failure", Message: "无效控制参数"})
 		return
 	}
-	if !c.engine.HasDevice(command.ChannelIndex, command.DeviceIndex) {
+	if !c.target.HasDevice(command.ChannelIndex, command.DeviceIndex) {
 		c.respondAck(msg, messageAck{RequestID: env.ID, ChannelIndex: command.ChannelIndex, DeviceIndex: command.DeviceIndex, Status: "failure", Message: "通道或设备不存在"})
 		return
 	}
-	accepted := c.engine.Submit(command.ChannelIndex, engine.WriteCommand{
+	accepted := c.target.Submit(command.ChannelIndex, engine.WriteCommand{
 		RequestID: env.ID, DeviceIndex: command.DeviceIndex, PropName: command.Name, RawValue: command.Value,
 	})
 	status, message := "accepted", ""
 	if !accepted {
-		status, message = "failure", "写命令队列已满"
+		status, message = "failure", "写命令队列已满或链路未就绪"
 	}
 	c.respondAck(msg, messageAck{RequestID: env.ID, ChannelIndex: command.ChannelIndex, DeviceIndex: command.DeviceIndex, Status: status, Message: message})
 }
@@ -244,17 +276,22 @@ func (c *Client) respondQuery(msg *nats.Msg, response messageQueryResp) {
 		return
 	}
 	data, err := json.Marshal(response)
-	if err == nil {
-		_ = c.conn.PublishMsg(newEnvelope("queryResp", data).toMsg(msg.Reply))
+	if err != nil {
+		return
 	}
+	_ = c.conn.PublishMsg(newEnvelope("queryResp", data).toMsg(msg.Reply))
 }
 
 func (c *Client) topology() ([]channelInfo, error) {
-	channels, err := c.source.LoadChannels(context.Background())
+	// 使用带超时的 ctx，避免 DB 查询风暴时无法反压。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	channels, err := c.source.LoadChannels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("读取链路: %w", err)
 	}
-	models, err := c.source.LoadModels(context.Background())
+	models, err := c.source.LoadModels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("读取设备模型: %w", err)
 	}
@@ -265,17 +302,22 @@ func (c *Client) topology() ([]channelInfo, error) {
 	result := make([]channelInfo, 0, len(channels))
 	for _, channel := range channels {
 		var mounts []engine.DeviceMount
-		_ = json.Unmarshal(channel.Devices, &mounts)
-		info := channelInfo{ID: channel.ID, ChannelIndex: channel.Index, Name: channel.Name, Type: channel.Type, Connected: c.engine.Connected(channel.Index)}
+		if err := json.Unmarshal(channel.Devices, &mounts); err != nil {
+			c.log.Warn("链路设备列表解析失败，拓扑中跳过该链路", "channel", channel.Name, "err", err)
+			continue
+		}
+		info := channelInfo{ID: channel.ID, ChannelIndex: channel.Index, Name: channel.Name, Type: channel.Type, Connected: c.target.Connected(channel.Index)}
 		for _, mount := range mounts {
-			device := deviceInfo{Index: mount.Index, Name: mount.Name}
+			device := deviceInfo{Index: mount.Index, Name: mount.Name, CommNo: mount.CommNo}
 			if model, ok := modelMap[mount.ModelID]; ok {
 				var properties []converter.PropMeta
-				if json.Unmarshal(model.Properties, &properties) == nil {
-					device.Datasheet = make([]dataEntry, 0, len(properties))
-					for _, property := range properties {
-						device.Datasheet = append(device.Datasheet, dataEntry{DataIndex: property.PropID, DataName: property.Name, DataRW: property.AccessMode})
-					}
+				if err := json.Unmarshal(model.Properties, &properties); err != nil {
+					c.log.Warn("设备模型属性解析失败", "model", model.Name, "err", err)
+					continue
+				}
+				device.Datasheet = make([]dataEntry, 0, len(properties))
+				for _, property := range properties {
+					device.Datasheet = append(device.Datasheet, dataEntry{DataIndex: property.PropID, DataName: property.Name, DataRW: property.AccessMode})
 				}
 			}
 			info.Devices = append(info.Devices, device)
@@ -283,6 +325,13 @@ func (c *Client) topology() ([]channelInfo, error) {
 		result = append(result, info)
 	}
 	return result, nil
+}
+
+func statusOf(ok bool) string {
+	if ok {
+		return "success"
+	}
+	return "failure"
 }
 
 func milliseconds(value int, fallback time.Duration) time.Duration {

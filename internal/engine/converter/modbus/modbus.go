@@ -23,7 +23,10 @@ func (*RTU) Protocol() string { return "Modbus RTU" }
 
 // EncodeRead 组装 RTU 读请求帧。
 func (*RTU) EncodeRead(unitID byte, fc byte, startAddr, quantity int) ([]byte, error) {
-	pdu := buildReadPDU(fc, startAddr, quantity)
+	pdu, err := buildReadPDU(fc, startAddr, quantity)
+	if err != nil {
+		return nil, err
+	}
 	return rtuBuildFrame(unitID, pdu), nil
 }
 
@@ -34,7 +37,14 @@ func (*RTU) EncodeWrite(unitID byte, pdu []byte) ([]byte, error) {
 
 // DecodeRead 解析 RTU 读响应，返回裸数据字节。
 // buf 为当前累积的全部字节；不足一帧返回 ErrShortFrame。
+//
+// 解析顺序很重要：必须先探测固定 5 字节的异常响应帧，再按 quantity
+// 推导正常响应长度。反过来写会永远看不到异常码——异常帧恒短于任何
+// 正常响应，会被当成 ErrShortFrame 一直累积到 3 秒超时。
 func (*RTU) DecodeRead(buf []byte, expectUnitID, fc byte, quantity int) ([]byte, error) {
+	if exc := tryRTUException(buf, expectUnitID, fc); exc != nil {
+		return nil, exc
+	}
 	expectedLen := rtuReadRespLen(fc, quantity)
 	if len(buf) < expectedLen {
 		return nil, ErrShortFrame
@@ -49,6 +59,9 @@ func (*RTU) DecodeRead(buf []byte, expectUnitID, fc byte, quantity int) ([]byte,
 
 // DecodeWrite 校验 RTU 写响应。
 func (*RTU) DecodeWrite(buf []byte, expectUnitID, fc byte, startAddr, quantity int) error {
+	if exc := tryRTUException(buf, expectUnitID, fc); exc != nil {
+		return exc
+	}
 	expectedLen := rtuWriteRespLen(fc)
 	if len(buf) < expectedLen {
 		return ErrShortFrame
@@ -59,16 +72,6 @@ func (*RTU) DecodeWrite(buf []byte, expectUnitID, fc byte, startAddr, quantity i
 		return err
 	}
 	return parseWritePDU(pdu, fc, startAddr, quantity)
-}
-
-// ReadFrameLen 返回 RTU 读响应的完整帧长度。
-func (*RTU) ReadFrameLen(fc byte, quantity int) int {
-	return rtuReadRespLen(fc, quantity)
-}
-
-// WriteFrameLen 返回 RTU 写响应的完整帧长度。
-func (*RTU) WriteFrameLen(fc byte) int {
-	return rtuWriteRespLen(fc)
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -91,8 +94,11 @@ func (t *TCP) NextTID() uint16 {
 
 // EncodeRead 组装 TCP 读请求帧，返回帧字节与分配的事务 ID。
 func (t *TCP) EncodeRead(unitID byte, fc byte, startAddr, quantity int) ([]byte, uint16, error) {
+	pdu, err := buildReadPDU(fc, startAddr, quantity)
+	if err != nil {
+		return nil, 0, err
+	}
 	tid := t.NextTID()
-	pdu := buildReadPDU(fc, startAddr, quantity)
 	return tcpBuildFrame(tid, unitID, pdu), tid, nil
 }
 
@@ -138,16 +144,7 @@ func (*TCP) DecodeWrite(buf []byte, expectTID uint16, expectUnitID, fc byte, sta
 	return parseWritePDU(pdu, fc, startAddr, quantity)
 }
 
-// ReadFrameLenTCP 从已读取的 MBAP 头中计算完整帧长度。
-// 若 buf 不足 MBAP 头长度返回 0。
-func ReadFrameLenTCP(buf []byte) int {
-	return tcpParseFrameLen(buf)
-}
-
-// MBAPHeaderLen MBAP 头固定长度（含 unitID）。
-const MBAPHeaderLen = tcpMBAPHeaderLen
-
-// AsException 尝试将 error 转为 ExceptionError，成功返回异常信息，否则返回原始错误。
+// AsException 尝试把错误转成 Modbus 异常响应。供上层做错误分类使用。
 func AsException(err error) (*ExceptionError, bool) {
 	var exc *ExceptionError
 	if errors.As(err, &exc) {

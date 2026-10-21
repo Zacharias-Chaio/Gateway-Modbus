@@ -3,10 +3,13 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"gateway/internal/engine/connector"
+	"gateway/internal/engine/converter"
+	"gateway/internal/engine/converter/modbus"
 	"gateway/internal/store"
 
 	"github.com/go-chi/chi/v5"
@@ -56,20 +59,46 @@ func (s *Server) SaveChannel(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "链路类型只支持 Serial / Network，当前为 "+c.Type)
 		return
 	}
+
+	// 配置字段级校验：这是全仓唯一的通道配置契约。
+	cfg, err := connector.ParseConfig(c.Type, c.Config)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "链路配置无效: "+err.Error())
+		return
+	}
+
+	// 挂载设备结构校验：模型必须存在、通讯号必须合法且在本链路内唯一、
+	// 设备序号必须唯一。以前这些全部推迟到运行期，且以 warn 形式跳过，
+	// 用户在界面上看到的是「保存成功、但设备一直没数据」。
+	mounts, err := decodeMounts(c.Devices)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "设备列表无效: "+err.Error())
+		return
+	}
+	if err := s.validateMounts(mounts); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// 冲突检测：同一串口端口或网络 IP+端口不能被多个链路共用。
-	if key := channelResourceKey(c.Type, c.Config); key != "" {
+	if key := cfg.ResourceKey(); key != "" {
 		var others []store.Channel
 		if err := s.DB.Where("id <> ?", c.ID).Find(&others).Error; err != nil {
 			fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		for _, o := range others {
-			if channelResourceKey(o.Type, o.Config) == key {
+			otherCfg, err := connector.ParseConfig(o.Type, o.Config)
+			if err != nil {
+				continue
+			}
+			if otherCfg.ResourceKey() == key {
 				fail(w, http.StatusConflict, "链路配置冲突：串口端口或网络 IP+端口已被链路「"+o.Name+"」占用，不能被多个链路共用")
 				return
 			}
 		}
 	}
+
 	if c.ID == "" {
 		// 明确新建：通道索引与通道ID 由服务端分配，客户端不可指定
 		index, err := nextChannelIndex(s.DB)
@@ -83,13 +112,13 @@ func (s *Server) SaveChannel(w http.ResponseWriter, r *http.Request) {
 			fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		s.notifyConfigChanged()
-		ok(w, c)
+		warnings := s.notifyConfigChanged()
+		okWithWarnings(w, c, warnings)
 		return
 	}
 	// 更新：主键已存在才覆盖，避免伪造主键插入脏数据
 	var exist store.Channel
-	err := s.DB.First(&exist, "id = ?", c.ID).Error
+	err = s.DB.First(&exist, "id = ?", c.ID).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			fail(w, http.StatusNotFound, "链路不存在: id="+c.ID)
@@ -104,8 +133,75 @@ func (s *Server) SaveChannel(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.notifyConfigChanged()
-	ok(w, c)
+	warnings := s.notifyConfigChanged()
+	okWithWarnings(w, c, warnings)
+}
+
+// decodeMounts 解析挂载设备列表。
+func decodeMounts(raw []byte) ([]store.DeviceMount, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var mounts []store.DeviceMount
+	if err := json.Unmarshal(raw, &mounts); err != nil {
+		return nil, err
+	}
+	return mounts, nil
+}
+
+// validateMounts 校验挂载设备的结构完整性。
+func (s *Server) validateMounts(mounts []store.DeviceMount) error {
+	if len(mounts) == 0 {
+		return nil
+	}
+	seenIndex := make(map[int]bool, len(mounts))
+	seenComm := make(map[int]bool, len(mounts))
+
+	var modelIDs []string
+	for _, m := range mounts {
+		modelIDs = append(modelIDs, m.ModelID)
+	}
+	existing := make(map[string]bool, len(modelIDs))
+	if len(modelIDs) > 0 {
+		var rows []store.DeviceModel
+		if err := s.DB.Select("id").Where("id IN ?", modelIDs).Find(&rows).Error; err != nil {
+			return fmt.Errorf("校验设备模型失败: %w", err)
+		}
+		for _, row := range rows {
+			existing[row.ID] = true
+		}
+	}
+
+	for i, m := range mounts {
+		label := fmt.Sprintf("设备 #%d", m.Index)
+		if m.Name != "" {
+			label = fmt.Sprintf("设备 #%d（%s）", m.Index, m.Name)
+		}
+		if m.Index < 0 {
+			return fmt.Errorf("%s: 设备序号不能为负", label)
+		}
+		if seenIndex[m.Index] {
+			return fmt.Errorf("%s: 设备序号重复", label)
+		}
+		seenIndex[m.Index] = true
+
+		if m.CommNo < 1 || m.CommNo > 247 {
+			return fmt.Errorf("%s: 通讯号 %d 越界（合法范围 1~247）", label, m.CommNo)
+		}
+		if seenComm[m.CommNo] {
+			return fmt.Errorf("%s: 通讯号 %d 在本链路内重复，多个设备使用同一从站地址会互相串话", label, m.CommNo)
+		}
+		seenComm[m.CommNo] = true
+
+		if strings.TrimSpace(m.ModelID) == "" {
+			return fmt.Errorf("%s: 必须选择设备模型", label)
+		}
+		if !existing[m.ModelID] {
+			return fmt.Errorf("%s: 设备模型 %q 不存在", label, m.ModelID)
+		}
+		_ = i
+	}
+	return nil
 }
 
 // DeleteChannel 删除指定链路。
@@ -124,43 +220,40 @@ func (s *Server) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "链路不存在: id="+id)
 		return
 	}
-	s.notifyConfigChanged()
-	ok(w, map[string]string{"id": id})
+	warnings := s.notifyConfigChanged()
+	okWithWarnings(w, map[string]string{"id": id}, warnings)
 }
 
-// notifyConfigChanged 通知运行时配置已变更：由 runtime 从 PlanSource
-// 拉取全量链路 / 模型并触发引擎差量热重载。API 层不直接操作引擎。
-func (s *Server) notifyConfigChanged() {
-	if runtime, ok := s.Engine.(RuntimeFacade); ok {
-		runtime.ConfigChanged()
-	}
-}
-
-// channelResourceKey 提取链路占用的硬件资源唯一键：串口以端口名唯一，
-// 网络以 IP+端口唯一。返回空串表示无可比较的资源占用，不参与冲突判断。
+// channelResourceKey 兼容旧调用：委托给 connector 的统一配置契约。
 func channelResourceKey(typ string, config []byte) string {
-	if len(config) == 0 {
+	cfg, err := connector.ParseConfig(typ, config)
+	if err != nil {
 		return ""
 	}
-	var cfg struct {
-		SerialName string          `json:"serialName"`
-		DeviceIP   string          `json:"deviceIp"`
-		DevicePort json.RawMessage `json:"devicePort"`
+	return cfg.ResourceKey()
+}
+
+// ProtocolCapabilities 返回已注册协议的元信息，供前端动态渲染下拉框，
+// 避免「后端支持的协议」与「前端写死的选项」长期脱节。
+func (s *Server) ProtocolCapabilities(w http.ResponseWriter, r *http.Request) {
+	type item struct {
+		Name          string `json:"name"`
+		InterfaceType string `json:"interfaceType"`
+		SupportsBits  bool   `json:"supportsBits"`
+		MaxReadRegs   int    `json:"maxReadRegisters"`
+		MaxReadBits   int    `json:"maxReadBits"`
 	}
-	if err := json.Unmarshal(config, &cfg); err != nil {
-		return ""
-	}
-	switch typ {
-	case "Serial":
-		if s := strings.TrimSpace(cfg.SerialName); s != "" {
-			return "Serial|" + strings.ToLower(s)
+	names := converter.Names()
+	out := make([]item, 0, len(names))
+	for _, name := range names {
+		spec, okSpec := converter.Lookup(name)
+		if !okSpec {
+			continue
 		}
-	case "Network":
-		ip := strings.TrimSpace(cfg.DeviceIP)
-		port := strings.TrimSpace(string(cfg.DevicePort))
-		if ip != "" && port != "" && port != "null" {
-			return "Network|" + strings.ToLower(ip) + ":" + port
-		}
+		out = append(out, item{
+			Name: string(name), InterfaceType: spec.InterfaceType, SupportsBits: spec.SupportsBits,
+			MaxReadRegs: modbus.MaxReadRegisters, MaxReadBits: modbus.MaxReadBits,
+		})
 	}
-	return ""
+	ok(w, out)
 }

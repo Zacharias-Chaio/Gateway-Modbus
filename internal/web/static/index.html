@@ -391,13 +391,23 @@
                     </div>
                     <div class="col-md-6">
                       <label class="form-label fw-semibold">超时重连次数</label>
-                      <input type="number" min="0" class="form-control" id="ch-reconnectRetries" placeholder="0 = 无限重连">
-                      <div class="form-text">0 表示无限重连；N 表示尝试 N 次后停止</div>
+                      <input type="number" min="0" max="100" class="form-control" id="ch-reconnectRetries" placeholder="0 = 无限重连">
+                      <div class="form-text">0 表示无限重连；N 表示尝试 N 次后转为每 30s 一次的慢速探测</div>
                     </div>
                     <div class="col-md-6">
                       <label class="form-label fw-semibold">失败重发次数</label>
-                      <input type="number" min="0" class="form-control" id="ch-resendRetries" placeholder="如 3">
-                      <div class="form-text">单帧发送失败的重试次数，超限后触发重连</div>
+                      <input type="number" min="0" max="100" class="form-control" id="ch-resendRetries" placeholder="如 3">
+                      <div class="form-text">单帧发送失败的重试次数；异常码等确定性错误不重发</div>
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label fw-semibold">帧间隔 (ms)</label>
+                      <input type="number" min="0" max="60000" class="form-control" id="ch-frameInterval" placeholder="0 = 不等待">
+                      <div class="form-text">半双工 485 总线上相邻两帧之间的静默时间；读偶发超时时可适当调大</div>
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label fw-semibold">整帧超时 (ms)</label>
+                      <input type="number" min="0" max="60000" class="form-control" id="ch-frameTimeoutMs" placeholder="0 = 默认 3000">
+                      <div class="form-text">收齐一帧响应的最大等待时间；1200bps 等低速链路应调大（125 寄存器约需 2.1s）</div>
                     </div>
                   </div>
 

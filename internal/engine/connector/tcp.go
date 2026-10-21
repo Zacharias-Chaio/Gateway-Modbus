@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"strconv"
 	"sync"
@@ -59,9 +60,13 @@ func (d *tcpDriver) Send(p []byte) (int, error) {
 	conn := d.conn
 	d.mu.Unlock()
 	if conn == nil {
-		return 0, net.ErrClosed
+		return 0, ErrPortClosed
 	}
-	return conn.Write(p)
+	n, err := conn.Write(p)
+	if err != nil {
+		return n, normalizeNetErr(err)
+	}
+	return n, nil
 }
 
 func (d *tcpDriver) Receive(p []byte, timeout time.Duration) (int, error) {
@@ -69,14 +74,18 @@ func (d *tcpDriver) Receive(p []byte, timeout time.Duration) (int, error) {
 	conn := d.conn
 	d.mu.Unlock()
 	if conn == nil {
-		return 0, net.ErrClosed
+		return 0, ErrPortClosed
 	}
 	if timeout > 0 {
 		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	} else {
 		_ = conn.SetReadDeadline(time.Time{})
 	}
-	return conn.Read(p)
+	n, err := conn.Read(p)
+	if err != nil {
+		return n, normalizeNetErr(err)
+	}
+	return n, nil
 }
 
 // Refresh 对 TCP 链路而言无独立缓冲可清，读掉可能残留的旧数据即可。
@@ -85,7 +94,7 @@ func (d *tcpDriver) Refresh() error {
 	conn := d.conn
 	d.mu.Unlock()
 	if conn == nil {
-		return net.ErrClosed
+		return ErrPortClosed
 	}
 	// 非阻塞地排空当前可读的残留字节。
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
@@ -108,4 +117,21 @@ func (d *tcpDriver) Close() error {
 		return nil
 	}
 	return conn.Close()
+}
+
+// normalizeNetErr 把「对端关闭/连接重置」归一化为 ErrPortClosed，
+// 同时保留原错误链（%w）让上层仍可 errors.Is/As 判断。
+// 读超时（deadline exceeded）不属于断线，必须原样返回。
+func normalizeNetErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return err // 读超时：正常控制流
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+		return errors.Join(ErrPortClosed, err)
+	}
+	return err
 }

@@ -32,11 +32,8 @@ func tcpBuildFrame(tid uint16, unitID byte, pdu []byte) []byte {
 // tcpMBAPHeaderLen MBAP 头固定长度（含 unitID）。
 const tcpMBAPHeaderLen = 7
 
-// tcpMinReadRespLen 返回 MBAP 头长度（7），用于渐进式读取第一步。
-func tcpMinReadRespLen() int { return tcpMBAPHeaderLen }
-
-// tcpParseFrameLen 从已读取的 MBAP 头（至少 7 字节）中解析出完整帧总长度。
-// 返回 MBAP(6) + length 字段值。
+// tcpParseFrameLen 从已读取的 MBAP 头（至少 6 字节）中解析出完整帧总长度。
+// 返回 MBAP(6) + length 字段值；头部不足时返回 0。
 func tcpParseFrameLen(header []byte) int {
 	if len(header) < 6 {
 		return 0
@@ -62,7 +59,7 @@ func tcpExtractPDU(frame []byte, expectTID uint16, expectUnitID byte) ([]byte, e
 		return nil, ErrProtocolIDMismatch
 	}
 	length := int(frame[4])<<8 | int(frame[5])
-	if len(frame) < 6+length {
+	if length < 1 || len(frame) < 6+length {
 		return nil, ErrShortFrame
 	}
 	unitID := frame[6]

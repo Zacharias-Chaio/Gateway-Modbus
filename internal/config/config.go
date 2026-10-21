@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"gateway/internal/logx"
@@ -32,6 +33,8 @@ type NATS struct {
 	Enabled              bool   `json:"enabled" yaml:"enabled"`
 	URL                  string `json:"url" yaml:"url"`
 	Name                 string `json:"name" yaml:"name"`
+	Username             string `json:"username" yaml:"username"`
+	Password             string `json:"password" yaml:"password"`
 	QueueSize            int    `json:"queueSize" yaml:"queueSize"`
 	ConnectTimeout       int    `json:"connectTimeout" yaml:"connectTimeout"`
 	ReconnectWait        int    `json:"reconnectWait" yaml:"reconnectWait"`
@@ -169,8 +172,8 @@ func SaveSettings(db *gorm.DB, settings Settings) error {
 
 // ValidateSettings keeps invalid values from being persisted through the settings UI.
 func ValidateSettings(settings Settings) error {
-	if settings.App.Gateway.GWID == "" || strings.Contains(settings.App.Gateway.GWID, ".") {
-		return fmt.Errorf("gateway.gw_id 不能为空且不能包含句点")
+	if _, err := ValidateGWID(settings.App.Gateway.GWID); err != nil {
+		return err
 	}
 	switch settings.App.Log.Level {
 	case "debug", "info", "warn", "error":
@@ -197,4 +200,28 @@ func ValidateSettings(settings Settings) error {
 		}
 	}
 	return nil
+}
+
+// gwIDPattern 限定 gw_id 只含字母、数字、下划线和短横线。
+//
+// 以前只禁止空值和句点，而 gw_id 会被直接拼进 NATS subject：
+// 填成 "gw*" 或 ">" 就能订阅到通配主题，接收本不属于本网关的控制命令。
+var gwIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// MaxGWIDLength 限制 gw_id 长度，避免超出 NATS subject 的实际上限。
+const MaxGWIDLength = 64
+
+// ValidateGWID 校验并返回规范化后的网关 ID。
+func ValidateGWID(id string) (string, error) {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return "", fmt.Errorf("gateway.gw_id 不能为空")
+	}
+	if len(trimmed) > MaxGWIDLength {
+		return "", fmt.Errorf("gateway.gw_id 长度不能超过 %d", MaxGWIDLength)
+	}
+	if !gwIDPattern.MatchString(trimmed) {
+		return "", fmt.Errorf("gateway.gw_id 只能包含字母、数字、下划线和短横线，当前为 %q", trimmed)
+	}
+	return trimmed, nil
 }

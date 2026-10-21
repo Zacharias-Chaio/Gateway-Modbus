@@ -19,13 +19,17 @@ import (
 var staticFS embed.FS
 
 // requestLogger 把 HTTP 请求日志接入 logx（mod=http 分支）。
+//
+// 前端 /api/realtime 每 2s 轮询一次，如果每条都打 Info，
+// 一个打开的页面就能把日志刷满。这里对轮询类只读接口降级为 Debug。
 func requestLogger(next http.Handler) http.Handler {
-	log := logx.Module("http")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		start := time.Now()
 		defer func() {
-			log.Info("HTTP",
+			log := logx.Module("http")
+			level := logx.RequestLogLevel(r.Method, r.URL.Path, ww.Status())
+			log.Log(r.Context(), level, "HTTP",
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", ww.Status(),
@@ -48,6 +52,11 @@ func Router(db *gorm.DB, runtime api.RuntimeFacade) http.Handler {
 	if runtime != nil {
 		s.Engine = runtime
 	}
+
+	// 健康探针挂在 /api 之外，便于容器/systemd 直接探活。
+	r.Get("/healthz", s.Health)
+	r.Get("/readyz", s.Ready)
+
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/models", s.ListModels)
 		r.Post("/models", s.SaveModel)
@@ -60,6 +69,8 @@ func Router(db *gorm.DB, runtime api.RuntimeFacade) http.Handler {
 		r.Get("/realtime", s.Realtime)
 		r.Post("/set", s.SetValue)
 		r.Get("/comm-monitor", s.CommunicationMonitor)
+
+		r.Get("/protocols", s.ProtocolCapabilities)
 
 		r.Get("/hardware", s.GetHardware)
 		r.Get("/settings", s.GetSettings)
@@ -80,10 +91,10 @@ func Router(db *gorm.DB, runtime api.RuntimeFacade) http.Handler {
 	return r
 }
 
-// engineStatusHandler 返回 GET /api/engine/status：各链路运行状态快照。
+// engineStatusHandler 返回 GET /api/engine/status：各链路运行状态 + 最近一次配置生效结果。
 func engineStatusHandler(runtime api.RuntimeFacade) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var data any = []any{}
+		var data any = map[string]any{"state": "unknown", "channels": []any{}}
 		if runtime != nil {
 			data = runtime.Status()
 		}

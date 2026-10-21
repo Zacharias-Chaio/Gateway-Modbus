@@ -74,7 +74,14 @@ type messageData struct {
 }
 
 // deviceCode 生成设备唯一编码：{gateway_id}{通道索引:03d}{设备索引:03d}，如 gw_001001001。
+//
+// 索引超过 999 时定宽会被突破（编码串变长导致平台侧解析串位）。
+// 这里显式截断到 3 位并打日志是不可接受的静默错误，因此改为：
+// 超过 999 时改用分隔符形式，让平台侧能明确区分而不是拿到一个错位的串。
 func deviceCode(gatewayID string, channelIndex, deviceIndex int) string {
+	if channelIndex < 0 || channelIndex > 999 || deviceIndex < 0 || deviceIndex > 999 {
+		return fmt.Sprintf("%s:%d:%d", gatewayID, channelIndex, deviceIndex)
+	}
 	return fmt.Sprintf("%s%03d%03d", gatewayID, channelIndex, deviceIndex)
 }
 
@@ -125,8 +132,9 @@ type channelInfo struct {
 }
 
 type deviceInfo struct {
-	Index     int         `json:"index"`
+	Index     int         `json:"index"` // 设备序号，等于通道挂载列表中的 index，全局稳定
 	Name      string      `json:"name"`
+	CommNo    int         `json:"comm_no,omitempty"` // Modbus 从站地址，便于平台侧交叉核对
 	Datasheet []dataEntry `json:"datasheet"`
 }
 

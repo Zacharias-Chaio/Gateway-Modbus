@@ -206,6 +206,7 @@ function fillChannelForm() {
   setVal('ch-index', c.channelIndex); setVal('ch-id', c.id || (c.channelIndex == null ? '' : channelIdFromIndex(c.channelIndex)));
   setVal('ch-name', c.name); setVal('ch-type', c.type);
   setVal('ch-reconnectRetries', c.reconnectRetries); setVal('ch-resendRetries', c.resendRetries); setVal('ch-pollInterval', c.pollInterval);
+  setVal('ch-frameInterval', c.frameInterval); setVal('ch-frameTimeoutMs', c.frameTimeoutMs);
   setVal('ch-baud', c.baudRate); setVal('ch-dataBits', c.dataBits);
   setVal('ch-parity', c.parity); setVal('ch-stopBits', c.stopBits);
   setVal('ch-deviceIp', c.deviceIp); setVal('ch-devicePort', c.devicePort);
@@ -217,6 +218,7 @@ function syncChannelFromForm() {
   const c = state.channel;
   c.name = val('ch-name'); c.type = val('ch-type');
   c.reconnectRetries = val('ch-reconnectRetries'); c.resendRetries = val('ch-resendRetries'); c.pollInterval = val('ch-pollInterval');
+  c.frameInterval = val('ch-frameInterval'); c.frameTimeoutMs = val('ch-frameTimeoutMs');
   c.serialName = val('ch-serialName'); c.baudRate = val('ch-baud'); c.dataBits = val('ch-dataBits'); c.parity = val('ch-parity'); c.stopBits = val('ch-stopBits');
   c.deviceIp = val('ch-deviceIp'); c.devicePort = val('ch-devicePort');
   c.devices = readChannelDeviceRows();
@@ -283,6 +285,7 @@ function buildChannelConfig(c) {
   });
   const base = { id: c.id || '', channelIndex: toNum(c.channelIndex, null), name: c.name, type: c.type,
     reconnectRetries: toNum(c.reconnectRetries, null), resendRetries: toNum(c.resendRetries, null), pollInterval: toNum(c.pollInterval, null),
+    frameInterval: toNum(c.frameInterval, null), frameTimeoutMs: toNum(c.frameTimeoutMs, null),
     devices };
   if (c.type === 'Serial') Object.assign(base, { serialName: hwNode('Serial', c.serialName), baudRate: toNum(c.baudRate, null), dataBits: toNum(c.dataBits, null), parity: c.parity, stopBits: c.stopBits });
   if (c.type === 'Network') Object.assign(base, { deviceIp: c.deviceIp, devicePort: c.devicePort === '' ? null : toNum(c.devicePort, null) });
