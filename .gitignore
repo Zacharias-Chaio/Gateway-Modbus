@@ -35,6 +35,11 @@ data/*
 logs/*
 docs/web-design-guide.md
 docs/frontend-backend-collaboration.md
-
+.github/
 # archify visual-check evidence (local review artifacts)
 docs/architecture.visual-check.*
+
+# Local build cache (sandbox-friendly, never committed)
+.gocache/
+
+*_test.go

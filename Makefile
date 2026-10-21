@@ -26,7 +26,7 @@ REMOVE_DIR := rm -rf "$(BUILD_DIR)"
 endif
 
 .DEFAULT_GOAL := build
-.PHONY: all build windows windows-arm64 linux-amd64 linux-arm64 release clean test help
+.PHONY: all build windows windows-arm64 linux-amd64 linux-arm64 release clean test test-race vet check help
 
 all: build
 
@@ -50,6 +50,15 @@ release: windows linux-amd64 linux-arm64
 
 test:
 	$(GO) test ./...
+
+test-race:
+	$(GO) test -race ./...
+
+vet:
+	$(GO) vet ./...
+
+# 提交前的完整校验：静态检查 + 竞态测试。
+check: vet test-race
 
 clean:
 	@$(REMOVE_DIR)
