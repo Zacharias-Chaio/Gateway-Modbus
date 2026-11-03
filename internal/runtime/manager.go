@@ -170,9 +170,11 @@ func (m *Manager) start() error {
 	if settings.App.NATS.Enabled {
 		nats, err = natsclient.New(runCtx, settings.App.Gateway, settings.App.NATS, m.source, eng)
 		if err != nil {
+			// 北向扇出已不可用：告警也发不出去（走 NATS），此处只留本地日志。
 			m.log.Warn("启动 NATS 客户端失败，数据扇出功能已禁用", "err", err)
 		} else {
 			eng.SetEventSink(nats)
+			eng.SetAlarmPublisher(nats.AlarmPublisher())
 		}
 	}
 

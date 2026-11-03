@@ -2,7 +2,7 @@
 
 本文档阐述网关侧 NATS 客户端的设计：配置、生命周期、连接与重连策略、降级行为等。
 
-主题定义、消息信封与消息载体格式等**消息契约**内容，参见 [message-contract-design.md](message-contract-design.md)。
+主题定义、消息信封与消息载体格式等**消息契约**内容，参见 [message-contract-design.md](message-contract-design.md)；平台级日志契约参见 [powerpulse-log-standard.md](powerpulse-log-standard.md)，平台级告警契约参见 [powerpulse-alarm-standard.md](powerpulse-alarm-standard.md)。
 
 ### 1. 客户端配置
 
@@ -40,6 +40,13 @@ nats:
   #   数据发布 → {subjectPrefix}.{gatewayID}.data
   #   控制接收 → {subjectPrefix}.{gatewayID}.cmd
   #   查询接口 → {subjectPrefix}.{gatewayID}.query
+
+  # 日志扇出（平台横切主题，契约见 powerpulse-log-standard.md；与 subjectPrefix 无关）
+  logEnabled: true    # 日志扇出总开关，默认开启（洪泛由 logLevel 阈值与发送侧限频治理）
+  logLevel: "warn"    # 扇出最低级别，与本地 log.level 相互独立
+
+  # 告警发布（平台横切主题，契约见 powerpulse-alarm-standard.md；随 enabled 启用）
+  #   powerpulse.alarm.gateway：断连/恢复沿、写命令失败终态、panic 隔离等软件告警
 ```
 
 ### 2. 启动与降级行为

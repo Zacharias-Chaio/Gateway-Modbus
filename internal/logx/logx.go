@@ -8,11 +8,14 @@
 package logx
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -83,6 +86,10 @@ func Init(opt Options) {
 	previous := runtime
 	mu.Unlock()
 	handlers = append(handlers, s.handler(level))
+
+	// 4) NATS 出口：常驻 handler，writer 未安装时自身短路。
+	// 放在 fanout 尾部：即便日志洪泛，也不会阻塞其余三路（各子 handler 独立拷贝）。
+	handlers = append(handlers, natsHandler{})
 
 	var inner slog.Handler
 	if len(handlers) == 1 {
@@ -162,7 +169,7 @@ func ParseLevel(s string) slog.Level {
 }
 
 // RequestLogLevel 决定一条 HTTP 访问日志的级别：
-// 轮询类只读接口（realtime / comm-monitor / syslog / engine status）降到 Debug，
+// 轮询类只读接口（realtime / comm-monitor / syslog / engine status / system-info）降到 Debug，
 // 否则一个打开的页面就能以 2Hz 的速度刷满日志文件。
 func RequestLogLevel(method, path string, status int) slog.Level {
 	if status >= 500 {
@@ -177,6 +184,7 @@ func RequestLogLevel(method, path string, status int) slog.Level {
 			strings.HasPrefix(path, "/api/comm-monitor"),
 			strings.HasPrefix(path, "/api/syslog"),
 			strings.HasPrefix(path, "/api/engine/status"),
+			strings.HasPrefix(path, "/api/system-info"),
 			strings.HasPrefix(path, "/healthz"),
 			strings.HasPrefix(path, "/readyz"):
 			return slog.LevelDebug
@@ -187,3 +195,70 @@ func RequestLogLevel(method, path string, status int) slog.Level {
 
 // 保持 time 引用（部分构建下用于未来扩展的时间窗采样）。
 var _ = time.Now
+
+// NATSWriter 是日志第四路出口（NATS 扇出）的接收方。
+//
+// 依赖倒置：logx 不能 import natsclient（natsclient 依赖 logx），由 runtime 组合根
+// 在 NATS 客户端创建成功后通过 SetNATSWriter 注入实现。nil 表示出口未启用。
+type NATSWriter interface {
+	// WriteLog 必须非阻塞；实现方自行做级别过滤与限频（契约见 docs/powerpulse-log-standard.md）。
+	WriteLog(level slog.Level, mod, msg string, attrs map[string]any, at time.Time)
+}
+
+var natsWriter atomic.Pointer[NATSWriter]
+
+// SetNATSWriter 安装/移除 NATS 日志出口。传 nil 即停用（runtime 停止 NATS 客户端时调用）。
+// 不加锁：指针读写原子，且出口侧自身必须容忍并发调用。
+func SetNATSWriter(w NATSWriter) {
+	if w == nil {
+		natsWriter.Store(nil)
+		return
+	}
+	natsWriter.Store(&w)
+}
+
+// natsHandler 把每条日志转交 NATS 出口。它常驻 handler 列表（Init 每次都装配），
+// 每条日志时动态查 writer——writer 为 nil 时零开销短路。这样 logx 热重载
+// 与 NATS 客户端重建（runtime restart）两个生命周期互不干扰。
+type natsHandler struct{}
+
+func (natsHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (natsHandler) Handle(_ context.Context, r slog.Record) error {
+	// 注意：原子指针本身可能为 nil（出口从未安装/已移除），
+	// 必须先判指针再解引用——写成 *natsWriter.Load() 会在 nil 上直接 panic
+	// （零值或 SetNATSWriter(nil) 后 Load 返回 nil 指针，不是 nil 接口）。
+	p := natsWriter.Load()
+	if p == nil || *p == nil {
+		return nil
+	}
+	w := *p
+	// 标量化 attrs：契约规定值仅标量（error→字符串、非标量 fmt.Sprint）。
+	attrs := make(map[string]any, r.NumAttrs())
+	mod := ""
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "mod" {
+			mod = a.Value.String()
+			return true
+		}
+		v := a.Value.Any()
+		switch v.(type) {
+		case string, int, int8, int16, int32, int64,
+			uint, uint8, uint16, uint32, uint64,
+			float32, float64, bool, nil:
+			attrs[a.Key] = v
+		case error:
+			attrs[a.Key] = v.(error).Error()
+		case time.Duration:
+			attrs[a.Key] = v.(time.Duration).String()
+		default:
+			attrs[a.Key] = fmt.Sprint(v)
+		}
+		return true
+	})
+	w.WriteLog(r.Level, mod, r.Message, attrs, r.Time)
+	return nil
+}
+
+func (natsHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return natsHandler{} }
+func (natsHandler) WithGroup(string) slog.Handler            { return natsHandler{} }

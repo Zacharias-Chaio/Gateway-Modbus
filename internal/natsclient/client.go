@@ -14,6 +14,7 @@ import (
 	"gateway/internal/engine/converter"
 	"gateway/internal/logx"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 )
 
@@ -44,6 +45,10 @@ type Client struct {
 	eventsMu     sync.Mutex
 	eventsClosed bool
 
+	// 日志扇出队列：与遥测队列隔离——日志洪泛不得挤占遥测；满时丢最旧（诊断流尽力而为）。
+	logQueue     chan logMessage
+	logThreshold slog.Level
+
 	done     chan struct{}
 	stopOnce sync.Once
 }
@@ -62,6 +67,8 @@ func New(ctx context.Context, gateway config.Gateway, cfg config.NATS, source en
 		config: cfg, gateway: gateway, source: source, target: target, log: logx.Module("nats"),
 		data: prefix + ".data", cmd: prefix + ".cmd", query: prefix + ".query",
 		events: make(chan any, queueSize(cfg.QueueSize)), done: make(chan struct{}),
+		logQueue:     make(chan logMessage, 1024),
+		logThreshold: logx.ParseLevel(cfg.LogLevel),
 	}
 	opts := []nats.Option{
 		nats.Name(cfg.Name),
@@ -98,6 +105,13 @@ func New(ctx context.Context, gateway config.Gateway, cfg config.NATS, source en
 		return nil, fmt.Errorf("初始化 NATS 订阅: %w", err)
 	}
 	go client.publishLoop(ctx)
+	if cfg.LogEnabled {
+		// 日志扇出：注册为 logx 第四路出口。必须放在 publishLoop 之后：
+		// 写入方（全局 logger）随时可能投递，goroutine 未起就会丢日志。
+		logx.SetNATSWriter(client)
+		go client.logLoop(ctx)
+		client.log.Info("NATS 日志扇出已启用", "subject", platformLogSubject, "level", client.logThreshold.String())
+	}
 	client.log.Info("NATS 客户端已启动", "data", client.data, "cmd", client.cmd, "query", client.query)
 	return client, nil
 }
@@ -137,6 +151,8 @@ func (c *Client) enqueue(event any) {
 // Close stops publishing and drains subscriptions before closing the NATS connection.
 func (c *Client) Close() {
 	c.stopOnce.Do(func() {
+		// 先摘除日志出口：Close 之后队列里的事件不再有意义，避免循环写已关闭通道。
+		logx.SetNATSWriter(nil)
 		c.eventsMu.Lock()
 		c.eventsClosed = true
 		close(c.events)
@@ -348,4 +364,126 @@ func queueSize(value int) int {
 		return 1
 	}
 	return value
+}
+
+// WriteLog 实现 logx.NATSWriter（日志第四路出口）。
+//
+// 非阻塞：满队列丢最旧并计一条溢出告警（queue.overflow，经告警主题，
+// 不再循环进日志队列）。级别过滤在这里做——logx 侧只标量化不过滤，
+// 保证本地/文件/前端三路不受平台阈值影响。
+func (c *Client) WriteLog(level slog.Level, mod, msg string, attrs map[string]any, at time.Time) {
+	if level < c.logThreshold {
+		return
+	}
+	m := logMessage{
+		LogID:  uuid.NewString(),
+		Source: logSource{Module: "gateway", Instance: c.gateway.GWID},
+		Level:  levelName(level),
+		Mod:    mod, Msg: msg, Attrs: attrs,
+		Timestamp: at.UnixMilli(),
+	}
+	select {
+	case c.logQueue <- m:
+	default:
+		// 丢最旧、留最新：诊断流尽力而为语义。
+		select {
+		case <-c.logQueue:
+		default:
+		}
+		c.PublishAlarm(alarmMessage{
+			AlarmID:  uuid.NewString(),
+			Source:   alarmSource{Module: "gateway", Instance: c.gateway.GWID},
+			Category: "software", Kind: "event", Level: 1,
+			Timestamp: time.Now().UnixMilli(),
+			Software: &alarmSoftware{
+				Code: "gateway.queue.overflow", Component: "nats",
+				Message: "日志发布队列已满，丢弃最旧日志",
+				Context: map[string]any{"queue_size": len(c.logQueue)},
+			},
+		})
+		select {
+		case c.logQueue <- m:
+		default:
+		}
+	}
+}
+
+// logLoop 是日志扇出的专用发布 goroutine：与遥测 publishLoop 并行，
+// 互不阻塞。ctx 取消即退出，丢弃未发布残量。
+func (c *Client) logLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m := <-c.logQueue:
+			data, err := json.Marshal(m)
+			if err != nil {
+				continue
+			}
+			if err := c.conn.PublishMsg(newEnvelope(messageTypeLog, data).toMsg(platformLogSubject)); err != nil {
+				// 日志发布失败只进本地日志，不再回灌 NATS 队列（避免反馈循环）。
+				c.log.Warn("日志扇出发布失败", "err", err)
+			}
+		}
+	}
+}
+
+// PublishAlarm 发布一条平台告警（契约见 docs/powerpulse-alarm-standard.md）。
+//
+// 同步直发而非走队列：告警量被沿语义+聚合控制在极低水平，且闭环类消息
+// （携带 request_id）必须尽力必达，不允许被日志/遥测的丢最旧策略牺牲。
+// PublishMsg 在断连期间写入 nats.go 重连缓冲，非阻塞。
+func (c *Client) PublishAlarm(msg alarmMessage) {
+	if msg.Software == nil {
+		return
+	}
+	msg.Source = alarmSource{Module: "gateway", Instance: c.gateway.GWID}
+	if msg.Timestamp == 0 {
+		msg.Timestamp = time.Now().UnixMilli()
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		c.log.Warn("告警消息编码失败", "code", msg.Software.Code, "err", err)
+		return
+	}
+	env := newEnvelope(messageTypeAlarm, data)
+	msg.AlarmID = env.ID // 契约：PP-Message-ID 与 alarm_id 一致
+	data, err = json.Marshal(msg)
+	if err != nil {
+		c.log.Warn("告警消息编码失败", "code", msg.Software.Code, "err", err)
+		return
+	}
+	if err := c.conn.PublishMsg(env.toMsg(platformAlarmSubject)); err != nil {
+		c.log.Warn("告警发布失败", "code", msg.Software.Code, "err", err)
+	}
+}
+
+// AlarmPublisher 暴露给 engine/runtime 的最小告警出口。
+// 返回的函数直接调用 PublishAlarm，便于 engine 侧以闭包形式持有。
+func (c *Client) AlarmPublisher() func(code, component, message string, level int, kind string, context map[string]any) {
+	return func(code, component, message string, level int, kind string, context map[string]any) {
+		c.PublishAlarm(alarmMessage{
+			AlarmID:  uuid.NewString(),
+			Source:   alarmSource{Module: "gateway", Instance: c.gateway.GWID},
+			Category: "software", Kind: kind, Level: level,
+			Timestamp: time.Now().UnixMilli(),
+			Software: &alarmSoftware{
+				Code: code, Component: component, Message: message, Context: context,
+			},
+		})
+	}
+}
+
+// levelName 把 slog 级别转为契约规定的小写字符串。
+func levelName(level slog.Level) string {
+	switch {
+	case level >= slog.LevelError:
+		return "error"
+	case level >= slog.LevelWarn:
+		return "warn"
+	case level >= slog.LevelInfo:
+		return "info"
+	default:
+		return "debug"
+	}
 }

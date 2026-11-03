@@ -26,6 +26,15 @@ const (
 	messageTypeCmd    = "cmd"    // 控制下行（NATS → 网关，REQ/REP）
 	messageTypeCmdAck = "cmdAck" // 控制执行结果（网关复用 .data 主题异步回报）
 	messageTypeQuery  = "query"  // 拓扑查询（NATS → 网关，REQ/REP）
+	messageTypeLog    = "log"    // 平台日志扇出（契约见 docs/powerpulse-log-standard.md）
+	messageTypeAlarm  = "alarm"  // 平台告警（契约见 docs/powerpulse-alarm-standard.md）
+)
+
+// 平台横切主题：powerpulse.log / powerpulse.alarm 命名空间是平台级契约，
+// 独立于网关业务主题前缀 subjectPrefix（后者只用于遥测/控制/查询）。
+const (
+	platformLogSubject   = "powerpulse.log.gateway"
+	platformAlarmSubject = "powerpulse.alarm.gateway"
 )
 
 type envelope struct {
@@ -153,4 +162,45 @@ type dataEntry struct {
 	DataIndex string `json:"data_id"`
 	DataName  string `json:"data_name"`
 	DataRW    string `json:"data_rw"`
+}
+
+// logMessage 平台通用日志消息（契约见 docs/powerpulse-log-standard.md 第 4 节）。
+type logMessage struct {
+	LogID     string         `json:"log_id"`
+	Source    logSource      `json:"source"`
+	Level     string         `json:"level"` // debug | info | warn | error（小写）
+	Mod       string         `json:"mod"`
+	Msg       string         `json:"msg"`
+	Attrs     map[string]any `json:"attrs,omitempty"`
+	Timestamp int64          `json:"timestamp"` // Unix 毫秒
+}
+
+type logSource struct {
+	Module   string `json:"module"`   // 固定 gateway，与主题二级命名空间一致
+	Instance string `json:"instance"` // gw_id，消费方按此过滤单网关日志
+}
+
+// alarmEnvelope 与 alarmMessage 平台通用告警消息（契约见 docs/powerpulse-alarm-standard.md 第 4 节）。
+// 结构体字段与标准保持一致；发布时 PP-Message-ID 与 alarm_id 填同一 UUID。
+type alarmMessage struct {
+	AlarmID   string         `json:"alarm_id"`
+	Source    alarmSource    `json:"source"`
+	Category  string         `json:"category"` // software（网关本期仅软件告警）
+	Kind      string         `json:"kind"`     // trigger | recover | event
+	Level     int            `json:"level"`    // 0 提示 / 1 一般 / 2 严重 / 3 紧急
+	Timestamp int64          `json:"timestamp"`
+	Count     int            `json:"count,omitempty"`
+	Software  *alarmSoftware `json:"software,omitempty"`
+}
+
+type alarmSource struct {
+	Module   string `json:"module"`   // 固定 gateway
+	Instance string `json:"instance"` // gw_id
+}
+
+type alarmSoftware struct {
+	Code      string         `json:"code"`      // 标准化事件码，见契约第 6 节
+	Component string         `json:"component"` // engine / nats / runtime / store
+	Message   string         `json:"message,omitempty"`
+	Context   map[string]any `json:"context,omitempty"`
 }

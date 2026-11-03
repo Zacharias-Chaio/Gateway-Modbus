@@ -44,6 +44,13 @@ type NATS struct {
 	PingInterval         int    `json:"pingInterval" yaml:"pingInterval"`
 	MaxPingsOut          int    `json:"maxPingsOut" yaml:"maxPingsOut"`
 	SubjectPrefix        string `json:"subjectPrefix" yaml:"subjectPrefix"`
+
+	// LogEnabled 控制日志扇出到平台日志主题 powerpulse.log.gateway（契约见 docs/powerpulse-log-standard.md）。
+	// 独立开关：默认开启；日志洪泛风险由 logLevel 阈值与发送侧限频治理（见标准第 6 节）。
+	LogEnabled bool `json:"logEnabled" yaml:"logEnabled"`
+	// LogLevel 是日志扇出的最低级别（debug|info|warn|error），与本地 log.level 相互独立：
+	// 本地日志面向现场排障，平台汇聚面向集中监控，信噪比需求不同。默认 warn。
+	LogLevel string `json:"logLevel" yaml:"logLevel"`
 }
 
 // Log 日志相关配置参数。
@@ -88,6 +95,7 @@ func Default() App {
 			QueueSize: 4096, ConnectTimeout: 2000, ReconnectWait: 2000,
 			MaxReconnects: -1, RetryOnFailedConnect: true, ReconnectBufSize: 8388608,
 			PingInterval: 20000, MaxPingsOut: 3, SubjectPrefix: "powerpulse.gateway",
+			LogEnabled: true, LogLevel: "warn",
 		},
 	}
 }
@@ -188,6 +196,12 @@ func ValidateSettings(settings Settings) error {
 	}
 	if settings.App.NATS.QueueSize < 1 || settings.App.NATS.ConnectTimeout < 0 || settings.App.NATS.ReconnectWait < 0 || settings.App.NATS.ReconnectBufSize < 0 || settings.App.NATS.PingInterval < 0 || settings.App.NATS.MaxPingsOut < 0 || settings.App.NATS.MaxReconnects < -1 {
 		return fmt.Errorf("NATS 数值配置无效")
+	}
+	// 日志扇出级别枚举校验；空值在 natsclient 侧回退默认 warn。
+	switch settings.App.NATS.LogLevel {
+	case "", "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("nats.logLevel 必须为 debug、info、warn 或 error")
 	}
 	for category, entries := range settings.Hardware {
 		if strings.TrimSpace(category) == "" {

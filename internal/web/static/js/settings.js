@@ -28,7 +28,9 @@ const SETTINGS_CARDS = [
     { path: 'nats.retryOnFailedConnect', label: '失败后重试', type: 'boolean', hint: '允许 nats.go 在连接失败后重试' },
     { path: 'nats.reconnectBufSize', label: '断连缓冲 (bytes)', type: 'number', min: 0 },
     { path: 'nats.pingInterval', label: '心跳间隔 (ms)', type: 'number', min: 0 },
-    { path: 'nats.maxPingsOut', label: '最大未响应心跳数', type: 'number', min: 0 }
+    { path: 'nats.maxPingsOut', label: '最大未响应心跳数', type: 'number', min: 0 },
+    { path: 'nats.logEnabled', label: '日志扇出', type: 'boolean', hint: '开启后网关日志发布到 powerpulse.log.gateway 主题' },
+    { path: 'nats.logLevel', label: '日志扇出级别', type: 'select', options: [['debug', 'Debug'], ['info', 'Info'], ['warn', 'Warn'], ['error', 'Error']], hint: '发布到 NATS 的最低日志级别，与本地日志级别相互独立' }
   ] }
 ];
 

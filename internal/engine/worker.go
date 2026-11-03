@@ -77,6 +77,8 @@ type worker struct {
 
 	monitor *commMonitor
 	sink    EventSink
+	alarmer AlarmPublisher // 软件告警出口（nil 安全），由 engine 注入
+	tracker *linkTracker   // 本链路断连告警沿追踪
 
 	// 属性缺失 ID 的告警只打一次，避免 2Hz × N 属性刷屏。
 	warnedNoPropID sync.Map
@@ -109,6 +111,7 @@ func newWorker(index int, name, fp string, cfg connector.Config, drv connector.D
 
 // start 启动链路 goroutine，用 parent 派生的 ctx 控制生命周期。
 func (w *worker) start(parent context.Context) {
+	w.tracker = newLinkTracker(w.alarmer, w.index, w.name, w.cfg.Target())
 	ctx, cancel := context.WithCancel(parent)
 	w.cancel = cancel
 	go w.run(ctx)
@@ -260,6 +263,10 @@ func (w *worker) run(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			w.log.Error("链路 goroutine panic，已隔离", "channel", w.name, "panic", r, "stack", string(debug.Stack()))
+			// 契约 gateway.engine.panic：level 3 紧急，一次性事件。
+			w.alarmer.Publish(alarmCodeEnginePanic, "engine",
+				"链路 goroutine panic，已隔离", 3, alarmKindEvent,
+				map[string]any{"channel_name": w.name, "panic": fmt.Sprint(r)})
 		}
 	}()
 	defer func() {
@@ -289,12 +296,23 @@ func (w *worker) run(ctx context.Context) {
 			w.markAllOffline()
 			w.publishAllOffline(false)
 
+			// 沿语义告警：首次 trigger / 持续断连窗口聚合（契约 5.2/7 节）。
+			if w.tracker != nil {
+				w.tracker.onDisconnect(err.Error(), connectAttempts)
+			}
+
 			// reconnectRetries == 0 表示无限重连；> 0 表示达到次数后转为慢速探测。
 			maxRetry := w.cfg.ReconnectRetries
 			if maxRetry > 0 && connectAttempts > maxRetry {
 				w.log.Error("链路连接失败次数已达上限，转入慢速探测",
 					"channel", w.name, "target", w.cfg.Target(),
 					"attempts", connectAttempts, "max", maxRetry)
+				w.alarmer.Publish(alarmCodeLinkDegraded, "engine",
+					"连接重试达上限，转入慢速探测", 2, alarmKindEvent,
+					map[string]any{
+						"channel_index": w.index, "channel_name": w.name,
+						"attempts": connectAttempts, "max": maxRetry,
+					})
 				w.setPhase("fatal")
 				// 慢速探测：不再永久放弃，而是低频重试 + 低频心跳，
 				// 避免「10 条链路全断时每 500ms 向 NATS 洪泛离线报文」。
@@ -306,9 +324,14 @@ func (w *worker) run(ctx context.Context) {
 			}
 
 			retryIn := time.Duration(connector.DefaultReconnectIntervalMs) * time.Millisecond
-			w.log.Warn("链路连接失败，稍后重试",
-				"channel", w.name, "target", w.cfg.Target(), "err", err,
-				"attempt", connectAttempts, "retryIn", retryIn.String())
+			// 噪音治理（契约第 6 节「首次+周期摘要+恢复」）：
+			// 第 1 次与之后每 10 次打一条 WARN；此前每次重试都刷一条，
+			// 实测一个月 2729 条同文日志，占告警日志的 92%。
+			if connectAttempts == 1 || connectAttempts%10 == 0 {
+				w.log.Warn("链路连接失败，稍后重试",
+					"channel", w.name, "target", w.cfg.Target(), "err", err,
+					"attempt", connectAttempts, "retryIn", retryIn.String())
+			}
 			w.setPhase("reconnecting")
 			if !w.waitReconnect(ctx, retryIn) {
 				return
@@ -325,6 +348,10 @@ func (w *worker) run(ctx context.Context) {
 		w.log.Info("链路已连接，开始采集",
 			"channel", w.name, "type", w.cfg.Type, "target", w.cfg.Target(),
 			"devices", len(w.plan.Devices), "pollInterval", w.cfg.PollDuration().String())
+		// 断连恢复沿：曾 trigger 过才发 recover，不发明造恢复。
+		if w.tracker != nil {
+			w.tracker.onRecover()
+		}
 
 		// 连接成功后进入采集循环；返回非 nil 表示需重连。
 		if err := w.collectLoop(ctx); err != nil {
@@ -419,8 +446,13 @@ func (w *worker) collectLoop(ctx context.Context) error {
 
 		for _, dev := range due {
 			if err := w.pollDevice(ctx, dev); err != nil {
-				w.log.Warn("设备轮询失败", "channel", w.name, "device", dev.DisplayName(), "err", err)
+				// 噪音治理（契约第 6 节）：首次 + 每 10 次一条摘要；
+				// 设备离线事实已由遥测在线状态承载，此处只保留诊断线索。
 				w.setDeviceOffline(dev, err)
+				fails := w.deviceFails(dev)
+				if fails == 1 || fails%10 == 0 {
+					w.log.Warn("设备轮询失败", "channel", w.name, "device", dev.DisplayName(), "err", err, "consecFail", fails)
+				}
 				w.publishTelemetry(dev, false)
 				if isLinkError(err) {
 					return err
@@ -474,6 +506,17 @@ func (w *worker) drainWrites(ctx context.Context) (bool, error) {
 			res := w.execWrite(ctx, cmd)
 			if !res.OK {
 				w.log.Warn("写命令执行失败", "channel", w.name, "prop", cmd.PropName, "err", res.Err)
+				// 契约 gateway.write.failed：闭环类（request_id），一请求一消息、
+				// 禁止聚合、成功静默（HTTP 入口失败已由响应返回，不重复告警）。
+				if cmd.RequestID != "" {
+					w.alarmer.Publish(alarmCodeWriteFailed, "engine",
+						res.Err, 2, alarmKindEvent,
+						map[string]any{
+							"request_id": cmd.RequestID, "channel_index": w.index,
+							"device_index": cmd.DeviceIndex, "prop": cmd.PropName,
+							"message": res.Err,
+						})
+				}
 			}
 			w.publishWriteResult(cmd, res)
 			if isLinkError(errors.New(res.Err)) {
@@ -874,6 +917,16 @@ func (w *worker) setDeviceOffline(dev *DevicePlan, err error) {
 	}
 	w.mu.Unlock()
 	w.setOnlineValue(dev, false)
+}
+
+// deviceFails 返回设备当前连续失败次数（噪音治理的限频依据）。
+func (w *worker) deviceFails(dev *DevicePlan) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if st := w.devStates[dev.Index]; st != nil {
+		return st.ConsecFail
+	}
+	return 0
 }
 
 // state 返回 worker 当前状态快照。

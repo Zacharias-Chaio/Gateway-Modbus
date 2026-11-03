@@ -46,7 +46,8 @@ type Engine struct {
 	applyMu sync.Mutex      // 串行化调谐，避免新旧 worker 在重启期间重叠运行
 	workers map[int]*worker // key: 通道索引（从 0 开始）
 	sink    EventSink
-	closed  bool // Stop 后置位，拒绝再启动 worker（避免僵尸 goroutine）
+	alarmer AlarmPublisher // 软件告警出口（nil 安全）
+	closed  bool           // Stop 后置位，拒绝再启动 worker（避免僵尸 goroutine）
 
 	// 调谐结果的可观测性：让「配置保存了但没生效」对运维可见。
 	lastApplyAt  time.Time
@@ -92,6 +93,14 @@ func New(ctx context.Context) *Engine {
 func (e *Engine) SetEventSink(sink EventSink) {
 	e.mu.Lock()
 	e.sink = sink
+	e.mu.Unlock()
+}
+
+// SetAlarmPublisher 设置软件告警出口（nil 安全：不设置则全部 no-op）。
+// 应在 Apply 启动 worker 前调用。
+func (e *Engine) SetAlarmPublisher(p AlarmPublisher) {
+	e.mu.Lock()
+	e.alarmer = p
 	e.mu.Unlock()
 }
 
@@ -189,6 +198,7 @@ func (e *Engine) startChannel(p ChannelPlan) error {
 		return fmt.Errorf("链路驱动创建失败: %w", err)
 	}
 	w := newWorker(p.ChannelIndex, p.ChannelName, planFingerprint(p), cfg, drv, p, e.sink)
+	w.alarmer = e.alarmer
 	w.start(e.ctx)
 	e.workers[p.ChannelIndex] = w
 
