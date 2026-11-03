@@ -17,6 +17,17 @@ const (
 	messageVersion         = "v1.0"
 )
 
+// 消息类型字面量：与 docs/message-contract-design.md 的契约一致，
+// 也是平台侧（ThingsModel south.go）switch 匹配的取值。
+// 以前这里散落着 "telemetry"/"cmdResult" 等魔法字符串：网关发布
+// telemetry 而平台只认 data，遥测被整流丢弃却无任何告警。
+const (
+	messageTypeData   = "data"   // 遥测上行（网关 → NATS）
+	messageTypeCmd    = "cmd"    // 控制下行（NATS → 网关，REQ/REP）
+	messageTypeCmdAck = "cmdAck" // 控制执行结果（网关复用 .data 主题异步回报）
+	messageTypeQuery  = "query"  // 拓扑查询（NATS → 网关，REQ/REP）
+)
+
 type envelope struct {
 	ID        string
 	Type      string

@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -120,8 +121,17 @@ func (d *tcpDriver) Close() error {
 }
 
 // normalizeNetErr 把「对端关闭/连接重置」归一化为 ErrPortClosed，
-// 同时保留原错误链（%w）让上层仍可 errors.Is/As 判断。
+// 同时保留原错误链（Join）让上层仍可 errors.Is/As 判断。
 // 读超时（deadline exceeded）不属于断线，必须原样返回。
+//
+// ⚠ Windows 陷阱（本函数曾经因此漏判，worker 对死连接无限空转）：
+//   - syscall.ECONNRESET 等 POSIX 名在 Windows 上是**虚构值**
+//     （APPLICATION_ERROR+iota，约 1<<29+35），不等于真实的
+//     WSAECONNRESET(10054)。errors.Is 永远匹配不上。
+//   - 真实值是 syscall.WSAECONNRESET / WSAECONNABORTED，
+//     必须用 errors.As 取出 syscall.Errno 后直接比较。
+//   - os.SyscallError（"wsasend: ..."）的 Unwrap 会露出内层 Errno，
+//     所以 errors.As 能穿透。
 func normalizeNetErr(err error) error {
 	if err == nil {
 		return nil
@@ -133,5 +143,38 @@ func normalizeNetErr(err error) error {
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 		return errors.Join(ErrPortClosed, err)
 	}
+	if isConnReset(err) {
+		return errors.Join(ErrPortClosed, err)
+	}
 	return err
+}
+
+// isConnReset 判断是否为连接被对端重置/中止类错误（跨平台）。
+//
+// Linux/POSIX：ECONNRESET(104)/ECONNABORTED(103)/ENETRESET(102)
+// Windows：WSAECONNRESET(10054)/WSAECONNABORTED(10053)
+// 两套值都用 syscall.Errno 数值直接比较（errors.As 穿透 os.SyscallError
+// 的 Unwrap 链取出 Errno），无需构建标签，三个目标平台统一编译。
+func isConnReset(err error) bool {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	switch errno {
+	case syscall.ECONNRESET, syscall.ECONNABORTED, syscall.ENETRESET:
+		// POSIX 真实值：Linux 构建下三个名字即真实错误码；
+		// Windows 构建下这些名字是虚构值，但 WSA* 分支兜住了 Windows。
+		return true
+	case 10054, 10053: // WSAECONNRESET / WSAECONNABORTED：Windows 真实值
+		return true
+	}
+	// TCP 重传超时（Linux ETIMEDOUT / Windows WSAETIMEDOUT=10060）也是断线：
+	// 重传耗尽说明链路已死，重发无意义。注意不能走 net.Error.Timeout()
+	// 判定——Windows 上 Errno.Timeout() 对 ETIMEDOUT 返回 true，会与
+	// 读 deadline 超时混淆；读超时在前面的 net.Error 分支已被放行，
+	// 能走到这里的 ETIMEDOUT 只可能是写/重传超时。
+	if errors.Is(err, syscall.ETIMEDOUT) || errno == 10060 {
+		return true
+	}
+	return false
 }

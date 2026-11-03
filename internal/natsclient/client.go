@@ -192,11 +192,13 @@ func (c *Client) publishTelemetry(event engine.TelemetryEvent) {
 			AccessMode: p.AccessMode, Value: p.Value, Timestamp: p.Timestamp.UnixMilli(),
 		}
 	}
-	c.publish("telemetry", payload)
+	// 契约：遥测上行固定为 PP-Message-Type: data（见 messageTypeData 注释）。
+	c.publish(messageTypeData, payload)
 }
 
 func (c *Client) publishWriteResult(event engine.WriteResultEvent) {
-	c.publish("cmdResult", messageAck{
+	// 契约：写命令异步终态复用 .data 主题，类型为 cmdAck。
+	c.publish(messageTypeCmdAck, messageAck{
 		RequestID: event.RequestID, ChannelIndex: event.ChannelIndex, DeviceIndex: event.DeviceIndex,
 		Status: statusOf(event.OK), Message: event.Error,
 	})
@@ -218,7 +220,7 @@ func (c *Client) publish(messageType string, payload any) {
 
 func (c *Client) handleCommand(msg *nats.Msg) {
 	env, err := envelopeFromMsg(msg)
-	if err != nil || env.Type != "cmd" {
+	if err != nil || env.Type != messageTypeCmd {
 		c.respondAck(msg, messageAck{Status: "failure", Message: "无效控制消息"})
 		return
 	}
@@ -248,13 +250,13 @@ func (c *Client) respondAck(msg *nats.Msg, response messageAck) {
 	}
 	data, err := json.Marshal(response)
 	if err == nil {
-		_ = c.conn.PublishMsg(newEnvelope("cmdAck", data).toMsg(msg.Reply))
+		_ = c.conn.PublishMsg(newEnvelope(messageTypeCmdAck, data).toMsg(msg.Reply))
 	}
 }
 
 func (c *Client) handleQuery(msg *nats.Msg) {
 	env, err := envelopeFromMsg(msg)
-	if err != nil || env.Type != "query" {
+	if err != nil || env.Type != messageTypeQuery {
 		c.respondQuery(msg, messageQueryResp{OK: false, Message: "无效查询消息"})
 		return
 	}

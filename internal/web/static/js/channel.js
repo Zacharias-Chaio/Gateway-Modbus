@@ -178,9 +178,10 @@ function validateChannelConflict(report = true) {
 /* ── 链路配置向导（1·链路配置 2·设备配置 3·预览） ── */
 function newChannel() {
   state.channel = emptyChannel();
-  // 通道索引从 0 开始自动分配；通道ID 按 Channel-[通道索引] 生成，二者均不可修改。
-  state.channel.channelIndex = nextChannelIndex();
-  state.channel.id = channelIdFromIndex(state.channel.channelIndex);
+  // id 必须保持空串：后端契约是「空 id = 新建，服务端分配 Channel-{索引} 后回填」。
+  // 这里预填 channelIdFromIndex 会让保存被当成「更新」，空库首建必报
+  // 「链路不存在: id=Channel-0」（404）。向导内的通道ID 只读展示
+  // 由 fillChannelForm 按预测值呈现，不依赖这里的 id。
   channelEditIndex = -1;
   enterChannelWizard();
 }
@@ -212,7 +213,12 @@ function backToChannelList() {
 function fillChannelForm() {
   const c = state.channel || emptyChannel();
   // 通道索引 / 通道ID 为自动生成的只读展示，不参与表单回读。
-  setVal('ch-index', c.channelIndex); setVal('ch-id', c.id || (c.channelIndex == null ? '' : channelIdFromIndex(c.channelIndex)));
+  // 新建（id 为空、索引未分配）时展示服务端将分配的预测值，
+  // 但不写回 state.channel.id —— 空串 id 是「新建」的判定依据。
+  const isNew = !c.id;
+  const previewIndex = c.channelIndex == null ? nextChannelIndex() : c.channelIndex;
+  setVal('ch-index', isNew ? previewIndex : c.channelIndex);
+  setVal('ch-id', isNew ? channelIdFromIndex(previewIndex) : c.id);
   setVal('ch-name', c.name); setVal('ch-type', c.type);
   setVal('ch-reconnectRetries', c.reconnectRetries); setVal('ch-resendRetries', c.resendRetries); setVal('ch-pollInterval', c.pollInterval);
   setVal('ch-frameInterval', c.frameInterval); setVal('ch-frameTimeoutMs', c.frameTimeoutMs);
