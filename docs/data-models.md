@@ -184,7 +184,22 @@
 
 ### 2.4 接口映射
 
-`gateway_settings` 记录同时保存应用配置和硬件映射；其中 `app.gateway.gw_id` 是网关唯一 ID，`app.gateway.sn` 是可选的网关硬件序列号，`app.gateway.location` 是可选的部署位置描述。
+`gateway_settings` 记录同时保存应用配置和硬件映射；其中 `app.gateway.gw_id` 是网关唯一 ID（**强制 `gw_` 前缀**），`app.gateway.sn` 是可选的网关硬件序列号，`app.gateway.location` 是可选的部署位置描述。
+
+### 2.4.1 接入凭据
+
+`gateway_provisioning` 单记录表保存网关的接入 Token。它与 `gateway_settings` **分表存放**是有意为之：网关设置会经 `GET /api/settings` 整体回传给前端，Token 混在其中就会被响应带出去。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | `uint` | 主键，恒为 1（单记录） |
+| `token` | `string` | 由物模型模块分配的 32 位字母数字字符串 |
+| `provisioned_at` | `time` | 首次配置完成时间 |
+
+- Token **只在上行方向使用**，任何 HTTP 响应都不包含它；
+- 网关名（`gw_id`）可回显，Token 不可回显，更换凭据需经界面重填；
+- 该表只表示「接入凭据是否就绪」，**不构成鉴权**：网关没有用户、会话或角色，
+  访问控制边界是网络本身。
 
 硬件映射定义面板丝印标签与实际设备节点的关系。首次创建数据库时，静态默认值来自 `internal/config/config.go`：
 

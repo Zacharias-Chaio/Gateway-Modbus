@@ -10,18 +10,53 @@
 </head>
 <body>
 
-<!-- ═══════════ Login Gate ═══════════ -->
-<div id="login-overlay" style="position:fixed;inset:0;background:var(--bg);z-index:2000;display:flex;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:16px;box-shadow:var(--card-shadow);padding:36px 40px;width:360px;">
+<!-- ═══════════ 首次配置：网关名 + Token ═══════════ -->
+<div id="setup-overlay" style="position:fixed;inset:0;background:var(--bg);z-index:2000;display:flex;align-items:center;justify-content:center;">
+  <div style="position:relative;background:#fff;border-radius:16px;box-shadow:var(--card-shadow);padding:36px 40px;width:420px;">
+    <button class="btn btn-sm btn-link text-muted" type="button" id="setup-skip" style="position:absolute;top:14px;right:16px;" onclick="skipSetup()">跳过</button>
     <div class="text-center mb-4">
       <div class="brand-icon" style="width:48px;height:48px;border-radius:12px;background:var(--primary);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:24px;"><i class="bi bi-hdd-network-fill"></i></div>
-      <h5 class="fw-bold mt-3 mb-0">IoT-Gateway</h5>
-      <div class="text-muted small">Please login</div>
+      <h5 class="fw-bold mt-3 mb-0">网关配置</h5>
     </div>
-    <input type="text" class="form-control mb-2" id="login-user" placeholder="Username" onkeydown="if(event.key==='Enter')doLogin()">
-    <input type="password" class="form-control mb-3" id="login-pass" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
-    <div id="login-err" class="text-danger small mb-2 d-none">用户名或密码错误</div>
-    <button class="btn btn-primary w-100" onclick="doLogin()">登录</button>
+    <div class="mb-3">
+      <label class="form-label fw-semibold" for="setup-gwid">网关ID</label>
+      <input type="text" class="form-control" id="setup-gwid" placeholder="gw_0001" autocomplete="off" onkeydown="if(event.key==='Enter')submitSetup()">
+      <div class="form-text">须以 <code>gw_</code> 开头，仅含字母、数字、下划线和短横线</div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-semibold" for="setup-token">Token</label>
+      <input type="password" class="form-control" id="setup-token" placeholder="请输入Token" autocomplete="off" onkeydown="if(event.key==='Enter')submitSetup()">
+    </div>
+    <div id="setup-err" class="text-danger small mb-2 d-none"></div>
+    <button class="btn btn-primary w-100" type="button" id="setup-submit" onclick="submitSetup()">完成</button>
+  </div>
+</div>
+
+<!-- ═══════════ 重新配置弹窗（设置页专用） ═══════════ -->
+<div class="modal fade" id="reprovisionModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-key me-2"></i>接入配置</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label fw-semibold" for="rp-gwid">网关名</label>
+          <input type="text" class="form-control" id="rp-gwid" placeholder="gw_0001" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('rp-token').focus()">
+          <div class="form-text">须以 <code>gw_</code> 开头，仅含字母、数字、下划线和短横线</div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label fw-semibold" for="rp-token">Token</label>
+          <input type="password" class="form-control" id="rp-token" placeholder="由物模型模块分配的 32 位字符串" autocomplete="off" onkeydown="if(event.key==='Enter')submitReprovision()">
+        </div>
+        <div id="rp-err" class="text-danger small mt-2 d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="rp-submit" onclick="submitReprovision()">保存</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -59,11 +94,6 @@
   <!-- ═══════════ Main ═══════════ -->
   <main class="app-main">
     <div class="main-inner">
-      <div class="app-topbar">
-        <button class="btn btn-outline-secondary btn-sm" type="button" onclick="doLogout()" title="退出登录">
-          <i class="bi bi-box-arrow-right me-1"></i>退出登录
-        </button>
-      </div>
 
       <!-- ═══════ Section: 设备模型 ═══════ -->
       <section id="section-device" class="app-section">

@@ -51,6 +51,14 @@ async function loadSystemInfo() {
     state.systemInfo = null;
   }
 }
+// 接入配置状态：网关名用于设置页回显，Token 后端不回传。
+async function loadProvisioning() {
+  try {
+    state.provisioning = await apiGet('/provisioning');
+  } catch (e) {
+    state.provisioning = null;
+  }
+}
 /* ── 链路持久化（/api/channels）── */
 // 通道索引从 0 开始、通道ID 按规则 Channel-[通道索引] 生成，均由后端分配且不可修改。
 function channelFromRow(r) {

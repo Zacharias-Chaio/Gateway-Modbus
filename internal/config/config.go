@@ -222,6 +222,12 @@ func ValidateSettings(settings Settings) error {
 // 填成 "gw*" 或 ">" 就能订阅到通配主题，接收本不属于本网关的控制命令。
 var gwIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// GWIDPrefix 是网关名的强制前缀。
+//
+// 网关名会被拼进 device_code（{gw_id}{channel:03d}{device:03d}）。
+// 强制统一前缀，避免出现无法与设备编码区分的网关名。
+const GWIDPrefix = "gw_"
+
 // MaxGWIDLength 限制 gw_id 长度，避免超出 NATS subject 的实际上限。
 const MaxGWIDLength = 64
 
@@ -236,6 +242,12 @@ func ValidateGWID(id string) (string, error) {
 	}
 	if !gwIDPattern.MatchString(trimmed) {
 		return "", fmt.Errorf("gateway.gw_id 只能包含字母、数字、下划线和短横线，当前为 %q", trimmed)
+	}
+	if !strings.HasPrefix(trimmed, GWIDPrefix) {
+		return "", fmt.Errorf("网关名必须以 %q 开头，例如 gw_0001", GWIDPrefix)
+	}
+	if len(trimmed) == len(GWIDPrefix) {
+		return "", fmt.Errorf("网关名在 %q 前缀后还需要有内容，例如 gw_0001", GWIDPrefix)
 	}
 	return trimmed, nil
 }

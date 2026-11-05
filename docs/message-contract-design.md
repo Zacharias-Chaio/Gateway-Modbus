@@ -14,12 +14,12 @@
 | 控制接收 | `{subjectPrefix}.{gw_id}.cmd` | NATS → 网关，写命令/控制指令 |
 | 查询接口 | `{subjectPrefix}.{gw_id}.query` | NATS → 网关，查询接口 |
 
-**示例**（`subjectPrefix: powerpulse.gateway`，`gw_id: gw-001`）：
+**示例**（`subjectPrefix: powerpulse.gateway`，`gw_id: gw_001`）：
 
 ```
-powerpulse.gateway.gw-001.data
-powerpulse.gateway.gw-001.cmd
-powerpulse.gateway.gw-001.query
+powerpulse.gateway.gw_001.data
+powerpulse.gateway.gw_001.cmd
+powerpulse.gateway.gw_001.query
 ```
 
 **设计要点**

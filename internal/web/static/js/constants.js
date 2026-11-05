@@ -39,6 +39,8 @@ const state = {
   hardware: {},
   settings: null,
   systemInfo: null,
+  // 接入配置状态：{ configured, gwId }；Token 由后端保管、不回传。
+  provisioning: null,
   channels: [],
   editingId: null,
   channel: null,

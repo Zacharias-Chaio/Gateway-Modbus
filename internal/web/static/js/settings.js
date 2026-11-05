@@ -38,6 +38,60 @@ const HARDWARE_CATEGORY_META = {
   Serial: { label: '串口接口', icon: 'usb-symbol' }
 };
 
+/* ══════════════ 网关接入配置（网关名 + Token） ══════════════ */
+// 网关名在此处只读展示；Token 不回显，因此更换凭据需在弹窗中重填。
+function provisioningCard() {
+  const gwId = state.provisioning ? state.provisioning.gwId : '';
+  const configured = state.provisioning && state.provisioning.configured;
+  return settingsCard('shield-lock', '接入配置', '网关ID与 Token', `<dl class="settings-static">
+    <div><dt>网关名</dt><dd id="provisioning-gwid">${escapeHtml(gwId || '-')}</dd></div>
+    <div><dt>接入 Token</dt><dd>${configured ? '已配置' : '未配置'}</dd></div>
+  </dl>
+  <div class="settings-restart mt-3">
+    <button class="btn btn-outline-secondary w-100" type="button" onclick="openReprovision()"><i class="bi bi-key me-1"></i>重新配置</button>
+  </div>`);
+}
+
+// openReprovision 打开独立的重新配置弹窗（不复用首屏遮罩）。
+function openReprovision() {
+  document.getElementById('rp-gwid').value = (state.provisioning && state.provisioning.gwId) || '';
+  document.getElementById('rp-token').value = '';
+  setRpError('');
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('reprovisionModal')).show();
+  document.getElementById('rp-gwid').focus();
+}
+
+function setRpError(message) {
+  const err = document.getElementById('rp-err');
+  if (!err) return;
+  err.textContent = message || '';
+  err.classList.toggle('d-none', !message);
+}
+
+// submitReprovision 保存接入配置后关闭弹窗、刷新设置页，不整页重载。
+async function submitReprovision() {
+  const gwId = val('rp-gwid');
+  const token = document.getElementById('rp-token').value.trim();
+  const button = document.getElementById('rp-submit');
+
+  if (!gwId) { setRpError('请填写网关名'); document.getElementById('rp-gwid').focus(); return; }
+  if (!token) { setRpError('请填写 Token'); document.getElementById('rp-token').focus(); return; }
+
+  button.disabled = true;
+  try {
+    await apiPost('/provisioning', { gwId: gwId, token: token });
+    document.getElementById('rp-token').value = '';
+    bootstrap.Modal.getInstance(document.getElementById('reprovisionModal')).hide();
+    await loadProvisioning();
+    renderSettings();
+    alert('接入配置已保存。网关名变更需点击「软件重启」后生效。');
+  } catch (error) {
+    setRpError(error.message || '保存失败');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function fieldID(path) { return 'setting-' + path.replaceAll('.', '-'); }
 function getPath(object, path) { return path.split('.').reduce((value, key) => value && value[key], object); }
 function setPath(object, path, value) {
@@ -115,8 +169,8 @@ function renderSettings() {
   if (save) save.disabled = false;
   const cards = SETTINGS_CARDS.map(card => settingsCard(card.icon, card.title, card.subtitle, card.fields.map(field => renderField(field, state.settings.app)).join('')));
   const columns = [
-    [cards[0], systemInfoCard(), renderHardwareCard()],
-    [cards[1], softwareSettingsCard()],
+    [cards[0], systemInfoCard(), renderHardwareCard(), softwareSettingsCard()],
+    [cards[1], provisioningCard()],
     [cards[2]]
   ];
   target.innerHTML = columns.map(column => `<div class="settings-column">${column.join('')}</div>`).join('');

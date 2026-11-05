@@ -35,7 +35,6 @@
     /* ── Main ── */
     .app-main { flex: 1; min-width: 0; padding: 26px 30px 48px; }
     .main-inner { max-width: 1080px; margin: 0 auto; }
-    .app-topbar { display: flex; justify-content: flex-end; margin-bottom: 18px; }
     .section-header { margin-bottom: 6px; }
     .section-header h4 { font-weight: 700; margin-bottom: 2px; color: #111827; }
     .section-header .sub { color: var(--muted-color); font-size: 13.5px; }

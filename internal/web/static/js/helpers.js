@@ -32,6 +32,8 @@ function switchSection(key) {
   if (key === 'settings') {
     renderSettings();
     loadSystemInfo().then(updateSystemInfo);
+    // 接入配置卡需要网关名与配置状态，拿到后重绘一次。
+    loadProvisioning().then(renderSettings);
   }
 }
 

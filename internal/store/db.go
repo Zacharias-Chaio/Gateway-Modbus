@@ -46,7 +46,7 @@ func Open(path string) (*gorm.DB, error) {
 	if err := migrateLegacyChannels(db, path); err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&DeviceModel{}, &Channel{}, &config.Record{}); err != nil {
+	if err := db.AutoMigrate(&DeviceModel{}, &Channel{}, &config.Record{}, &config.Provisioning{}); err != nil {
 		return nil, err
 	}
 	return db, nil

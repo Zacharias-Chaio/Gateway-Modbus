@@ -72,6 +72,10 @@ func Router(db *gorm.DB, runtime api.RuntimeFacade) http.Handler {
 
 		r.Get("/protocols", s.ProtocolCapabilities)
 
+		// 首次配置：读写网关名与 Token（响应不含 Token）。
+		r.Get("/provisioning", s.GetProvisioning)
+		r.Post("/provisioning", s.SaveProvisioning)
+
 		r.Get("/hardware", s.GetHardware)
 		r.Get("/settings", s.GetSettings)
 		r.Post("/settings", s.SaveSettings)

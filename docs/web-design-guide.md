@@ -451,34 +451,59 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft Y
 
 ---
 
-## 八、登录门面（Login Overlay）
+## 八、接入配置提醒（Provisioning Overlay）
 
 ```html
-<div id="login-overlay" style="position:fixed;inset:0;background:var(--bg);z-index:2000;
+<div id="setup-overlay" style="position:fixed;inset:0;background:var(--bg);z-index:2000;
      display:flex;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:16px;box-shadow:var(--card-shadow);
-       padding:36px 40px;width:360px;">
+  <div style="position:relative;background:#fff;border-radius:16px;box-shadow:var(--card-shadow);
+       padding:36px 40px;width:420px;">
+    <!-- 右上角绝对定位的「跳过」按钮（btn btn-sm btn-link text-muted，position:absolute;top:14px;right:16px） -->
     <div class="text-center mb-4">
       <div class="brand-icon" style="width:48px;height:48px;border-radius:12px;
            background:var(--primary);color:#fff;display:inline-flex;
            align-items:center;justify-content:center;font-size:24px;">
         <i class="bi bi-hdd-network-fill"></i>
       </div>
-      <h5 class="fw-bold mt-3 mb-0">IoT-Gateway</h5>
-      <div class="text-muted small">Please login</div>
+      <h5 class="fw-bold mt-3 mb-0">网关接入配置</h5>
+      <div class="text-muted small">建议填写网关名与接入 Token；也可以先跳过，稍后在网关设置中配置</div>
     </div>
-    <!-- 用户名 / 密码 / 错误提示 / 登录按钮 -->
+    <!-- 网关名输入 + 说明 / Token 输入 / 错误提示 / 保存并进入（w-100 整行） -->
   </div>
 </div>
 ```
 
 - 全屏覆盖，背景使用 `var(--bg)`，`z-index:2000`
-- 卡片宽 **360px**，圆角 16px，使用 `var(--card-shadow)`
+- 卡片宽 **420px**（比常规卡片宽，因含字段说明），圆角 16px，使用 `var(--card-shadow)`
 - 品牌图标采用主色实心方块 + 白字图标
-- 错误提示 `text-danger small` + `d-none` 切换
-- 登录成功后将 `gw_auth=1` 写入 `sessionStorage` 并给遮罩添加 `d-none`；不移除遮罩节点，供登出后复用。
-- 主内容区顶端使用 `.app-topbar` 右对齐退出按钮，按钮采用 `btn btn-outline-secondary btn-sm` 与 `bi-box-arrow-right`；登出时清除 `gw_auth`、清空密码、显示遮罩并聚焦用户名输入框。
-- 当前登录仅为前端会话门面，没有后端鉴权；不得将其视为访问控制边界。
+- 错误提示 `text-danger small` + `d-none` 切换；字段错误就地提示，不用 `alert`
+- 网关名输入框 `placeholder="gw_0001"`，下方说明「须以 `gw_` 开头」
+- Token 输入框 `type="password"`，不回显
+- 「跳过」按钮绝对定位于卡片右上角（`position:absolute;top:14px;right:16px`，`btn btn-sm btn-link text-muted` 低调样式）；主按钮「保存并进入」`w-100` 整行占满。跳过仅收起本次遮罩，软件正常可用
+- 提交成功后清空 Token 输入框再 `window.location.reload()`，避免凭据留在 DOM 中
+- 遮罩显隐以 `GET /api/provisioning` 的 `configured` 为准，**不用本地标记**：
+  跳过不落任何状态，未配置期间每次打开页面都会再次提醒；完成配置后不再弹出
+- 业务接口**不做任何拦截**：配置是提醒，不是门
+
+### 重新配置弹窗
+
+设置页「接入配置」卡片只读展示网关名与 Token 配置状态，「重新配置」打开独立的
+居中 Modal（`#reprovisionModal`，`modal-dialog-centered`），表单与首屏遮罩一致
+（网关名 + Token + 就地错误提示 + 取消/保存）。不复用首屏遮罩：用户正在设置页操作，
+全屏遮罩会打断上下文。保存成功后关闭弹窗、局部刷新设置页，不整页重载。
+
+### 这不是登录
+
+网关**没有**用户登录体系，也**没有**接口鉴权：没有用户表、会话、角色，也不存在凭据校验。
+本节描述的是一个**可跳过的提醒**——网关名与 Token 是否已写入数据库：
+
+- 不承担任何访问控制职责，**不得**被视为安全边界；
+- 不存在「登出」；
+- 访问控制边界是网络本身（见 README「部署前提：仅限受控网络」）。
+
+设置页「接入配置」卡片只读展示网关名与 Token 配置状态，提供「重新配置」按钮重填
+（Token 不回显，更换凭据必须重填，不能只读展示后编辑）。
+
 
 ---
 

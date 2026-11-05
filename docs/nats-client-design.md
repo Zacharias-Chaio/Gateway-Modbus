@@ -11,7 +11,7 @@ NATS 配置保存在 SQLite 的 `gateway_settings` 中，通过 Web 的“网关
 ```yaml
 # 数据出口：NATS 发布配置
 gateway:
-  gw_id: "gw-001"               # 网关唯一 ID，用于 NATS 主题
+  gw_id: "gw_001"               # 网关唯一 ID（强制 gw_ 前缀），用于 NATS 主题
   sn: "GW-20260908-001"         # 网关硬件序列号
   location: "A 厂区 1 号配电室"   # 网关部署位置
 
