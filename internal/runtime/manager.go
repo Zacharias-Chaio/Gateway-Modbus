@@ -168,7 +168,16 @@ func (m *Manager) start() error {
 	eng := engine.New(runCtx)
 	var nats *natsclient.Client
 	if settings.App.NATS.Enabled {
-		nats, err = natsclient.New(runCtx, settings.App.Gateway, settings.App.NATS, m.source, eng)
+		// 接入 Token 从 gateway_provisioning 独立表读取：它在首次/重新配置时写入，
+		// 与 gateway_settings 分表存放，避免经 /api/settings 回传泄漏。
+		// 读取失败按未配置处理（空串随消息扇出），不阻断北向启动。
+		gatewayToken := ""
+		if record, err := config.LoadProvisioning(m.db); err == nil {
+			gatewayToken = record.Token
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			m.log.Warn("读取接入 Token 失败，遥测将以空 token 扇出", "err", err)
+		}
+		nats, err = natsclient.New(runCtx, settings.App.Gateway, gatewayToken, settings.App.NATS, m.source, eng)
 		if err != nil {
 			// 北向扇出已不可用：告警也发不出去（走 NATS），此处只留本地日志。
 			m.log.Warn("启动 NATS 客户端失败，数据扇出功能已禁用", "err", err)

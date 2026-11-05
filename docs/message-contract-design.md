@@ -134,6 +134,7 @@ func (e *Envelope) FromNatsMsg(msg *nats.Msg) (*Envelope, error) {
 type MessageData struct {
   GatewayID    string             `json:"gateway_id"`    // 网关 ID
   GatewaySN    string             `json:"gateway_sn"`    // 网关硬件序列号
+  GatewayToken string             `json:"gateway_token"` // 网关接入 Token（物模型模块分配；未配置时为空串）
   ChannelIndex int                `json:"channel_index"` // 通道索引，从 0 开始（对应通道ID Channel-{索引}）
   DeviceIndex  int                `json:"device_index"`  // 设备在通道挂载列表中的序号
   DeviceName   string             `json:"device_name"`   // 用户填写的设备名称
@@ -158,6 +159,8 @@ type PropVal struct {
 
 **说明**
 - `gateway_id` 和 `gateway_sn` 标识当前网关，供订阅方识别数据来源；
+- `gateway_token` 是网关接入凭据（由物模型模块生成并分配，32 位字符串）：
+  平台侧用于校验数据来源的合法性。网关未完成接入配置时该字段为空串，消息仍正常发送；
 - `device_code` 为设备唯一编码：**网关 ID + 通道索引（3 位补零）+ 设备索引（3 位补零）** 直接拼接，例如网关 `gw_001` 的 0 号通道 0 号设备为 `"gw_001001001"`。该字段仅供订阅方程序化索引设备，**不需要在前端展示**；
 - `properties` 为 map 而非数组：key 是模型属性 ID，订阅方可稳定索引；每个值同时携带属性名称；
   需区分同通道多设备时使用 `device_index`（等价于引擎 cacheKey 的 `deviceIndex/propName` 前缀）。

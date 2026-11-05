@@ -83,6 +83,7 @@ func (e envelope) toMsg(subject string) *nats.Msg {
 type messageData struct {
 	GatewayID    string             `json:"gateway_id"`
 	GatewaySN    string             `json:"gateway_sn"`
+	GatewayToken string             `json:"gateway_token"` // 接入 Token，供北向平台校验数据来源
 	DeviceCode   string             `json:"device_code"`   // 设备唯一编码：{gateway_id}{通道索引:03d}{设备索引:03d}，如 gw_001001001
 	ChannelIndex int                `json:"channel_index"` // 通道索引，从 0 开始（与通道ID Channel-{索引} 对应）
 	DeviceIndex  int                `json:"device_index"`

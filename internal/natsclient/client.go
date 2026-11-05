@@ -31,6 +31,7 @@ type CommandTarget interface {
 type Client struct {
 	config  config.NATS
 	gateway config.Gateway
+	token   string
 	source  engine.PlanSource
 	target  CommandTarget
 	log     *slog.Logger
@@ -54,7 +55,9 @@ type Client struct {
 }
 
 // source 提供链路与设备模型配置（拓扑查询用），北向客户端不直接依赖存储层。
-func New(ctx context.Context, gateway config.Gateway, cfg config.NATS, source engine.PlanSource, target CommandTarget) (*Client, error) {
+// gatewayToken 是网关对北向平台的接入凭据，随每条遥测上行消息扇出；
+// 未配置时为空串，字段仍会出现在消息中（gateway_token: ""）。
+func New(ctx context.Context, gateway config.Gateway, gatewayToken string, cfg config.NATS, source engine.PlanSource, target CommandTarget) (*Client, error) {
 	gwID, err := config.ValidateGWID(gateway.GWID)
 	if err != nil {
 		return nil, err
@@ -64,7 +67,7 @@ func New(ctx context.Context, gateway config.Gateway, cfg config.NATS, source en
 	}
 	prefix := strings.TrimSuffix(cfg.SubjectPrefix, ".") + "." + gwID
 	client := &Client{
-		config: cfg, gateway: gateway, source: source, target: target, log: logx.Module("nats"),
+		config: cfg, gateway: gateway, token: gatewayToken, source: source, target: target, log: logx.Module("nats"),
 		data: prefix + ".data", cmd: prefix + ".cmd", query: prefix + ".query",
 		events: make(chan any, queueSize(cfg.QueueSize)), done: make(chan struct{}),
 		logQueue:     make(chan logMessage, 1024),
@@ -193,6 +196,7 @@ func (c *Client) publishTelemetry(event engine.TelemetryEvent) {
 	payload := messageData{
 		GatewayID:    c.gateway.GWID,
 		GatewaySN:    c.gateway.SN,
+		GatewayToken: c.token,
 		DeviceCode:   deviceCode(c.gateway.GWID, event.ChannelIndex, event.DeviceIndex),
 		ChannelIndex: event.ChannelIndex,
 		DeviceIndex:  event.DeviceIndex,
